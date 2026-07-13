@@ -138,7 +138,7 @@ async function seedData(db) {
 
   const quizCount = await count(db, "quizzes");
   if (!quizCount) {
-    await db.prepare("INSERT INTO quizzes VALUES (?, ?, ?, ?)").bind(id("quiz"), "Research Methods Readiness Quiz", JSON.stringify(sampleQuestions.slice(0, 5)), 180, now()).run();
+    await db.prepare("INSERT INTO quizzes VALUES (?, ?, ?, ?, ?)").bind(id("quiz"), "Research Methods Readiness Quiz", JSON.stringify(sampleQuestions.slice(0, 5)), 180, now()).run();
   }
 
   const itemCount = await count(db, "lost_items");
