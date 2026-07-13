@@ -295,7 +295,7 @@ async function generateQuiz(request, env) {
   const note = form.get("note");
   if (note && note.name) await storeUpload(env, note, "lecture-notes");
   const questions = Array.from({ length: requested }, (_, index) => sampleQuestions[index % sampleQuestions.length]).map((question, index) => ({ ...question, question: `${index + 1}. ${question.question}` }));
-  await env.DB.prepare("INSERT INTO quizzes VALUES (?, ?, ?, ?)").bind(id("quiz"), title, JSON.stringify(questions), Math.max(120, requested * 45), now()).run();
+  await env.DB.prepare("INSERT INTO quizzes VALUES (?, ?, ?, ?, ?)").bind(id("quiz"), title, JSON.stringify(questions), Math.max(120, requested * 45), now()).run();
   return listQuizzes(env);
 }
 
