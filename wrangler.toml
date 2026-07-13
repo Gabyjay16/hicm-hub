@@ -5,7 +5,7 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "hicm-hub-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "bc9a2b59-e792-4eb4-8ce5-6ef3b348f945"
 
 [[r2_buckets]]
 binding = "UPLOADS"
