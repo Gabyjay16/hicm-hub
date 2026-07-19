@@ -4,7 +4,7 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 
 const groups = [
-  { label: "Academics", items: [{ label: "Evaluation", to: "/quiz" }, { label: "Lecture Notes", to: "/quiz" }, { label: "Plagiarism Test", to: "/thesis" }] },
+  { label: "Academics", items: [{ label: "Evaluation", to: "/quiz" }, { label: "Lecture Notes", to: "/notes" }, { label: "Plagiarism Test", to: "/thesis" }] },
   { label: "Student Services", items: [{ label: "Complaints Desk", to: "/complaints" }, { label: "Lost & Found", to: "/lost-found" }] },
   { label: "Campus Life", items: [{ label: "Announcements", to: "/announcements" }, { label: "Student Voting", to: "/voting" }, { label: "General Forum", to: "/forums" }] },
 ];
@@ -26,15 +26,15 @@ export default function Navbar() {
           <span className="font-serif text-xl font-bold text-navy sm:text-2xl">{staff ? "Staff Portal" : "HICM Portal"}</span>
         </Link>
 
-        <div className="hidden items-center gap-1 lg:flex">
+        {session && <div className="hidden items-center gap-1 lg:flex">
           {groups.map((group) => <Dropdown key={group.label} group={group} />)}
-        </div>
+        </div>}
 
         <div className="flex items-center gap-2 sm:gap-4">
-          <Link to="/alerts" className="relative grid h-10 w-10 place-items-center text-navy" aria-label={`${unreadCount} unread notifications`}>
+          {session && <Link to="/alerts" className="relative grid h-10 w-10 place-items-center text-navy" aria-label={`${unreadCount} unread notifications`}>
             <Bell size={23} />
             {unreadCount > 0 && <span className="absolute right-0 top-0 grid h-5 min-w-5 place-items-center rounded-full bg-teal-700 px-1 text-[11px] font-bold text-white">{unreadCount > 99 ? "99+" : unreadCount}</span>}
-          </Link>
+          </Link>}
           {session ? (
             <div className="relative">
               <button onClick={() => setProfileOpen((open) => !open)} className="flex max-w-48 items-center gap-2 px-1 py-2 text-sm font-semibold text-navy sm:text-base">
@@ -54,12 +54,12 @@ export default function Navbar() {
         </div>
       </nav>
     </header>
-    <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
+    {session && <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
       <MobileLink to="/" label="Home" icon={Home} active={location.pathname === "/"} />
       <MobileLink to={staff ? "/quiz" : "/forums"} label={staff ? "Academic Tools" : "Forum"} icon={staff ? BriefcaseBusiness : MessageSquare} active={location.pathname === (staff ? "/quiz" : "/forums")} />
       <MobileLink to="/alerts" label="Alerts" icon={Bell} active={location.pathname === "/alerts"} />
       <button aria-label={session ? "Open profile menu" : "Login"} onClick={() => session ? setProfileOpen((open) => !open) : setAuthOpen(true)} className="mobile-nav-item"><UserRound size={23} /><span>Profile</span></button>
-    </nav>
+    </nav>}
     </>
   );
 }
