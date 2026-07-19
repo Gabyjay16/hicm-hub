@@ -1,5 +1,5 @@
 import {
-  Bell, BookOpen, Building2, CheckSquare, ClipboardCheck, FileSearch, GraduationCap,
+  Bell, BookOpen, Building2, CheckSquare, ChevronRight, ClipboardCheck, FileSearch, GraduationCap,
   Landmark, MessageSquareText, Search, UploadCloud, UsersRound, Vote,
 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -46,7 +46,7 @@ function StudentHome({ name }) {
           <span className="portal-icon-ring"><MessageSquareText size={24} /></span>
           <span className="flex-1 text-lg font-extrabold text-navy sm:text-xl">General Forum</span>
           <span className="portal-count">1</span>
-          <span aria-hidden="true" className="text-2xl font-light">›</span>
+          <ChevronRight size={22} aria-hidden="true" />
         </Link>
       </div>
     </main>
