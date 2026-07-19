@@ -1,15 +1,33 @@
+let csrfToken = "";
+
+export function setCsrfToken(value = "") {
+  csrfToken = value;
+}
+
 export async function api(path, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  const mutationHeaders = !["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken ? { "X-CSRF-Token": csrfToken } : {};
   const response = await fetch(`/api${path}`, {
     credentials: "include",
     ...options,
-    headers: options.body instanceof FormData ? options.headers : { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: options.body instanceof FormData
+      ? { ...mutationHeaders, ...(options.headers || {}) }
+      : { "Content-Type": "application/json", ...mutationHeaders, ...(options.headers || {}) },
   });
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error || "Request failed.");
+    if (response.status === 401) window.dispatchEvent(new CustomEvent("hicm:session-expired"));
+    const error = new Error(data.error || "Request failed.");
+    error.status = response.status;
+    error.code = data.code;
+    throw error;
   }
   return data;
+}
+
+export function deleteJson(path, body = {}) {
+  return api(path, { method: "DELETE", body: JSON.stringify(body) });
 }
 
 export function postJson(path, body) {
