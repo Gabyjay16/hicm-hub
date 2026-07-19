@@ -7,16 +7,18 @@ No credentials, votes, application records, or session authority are stored in L
 ## Current modules
 
 - Announcement-only signed-out screen with admin-published image and video media; every portal feature requires authentication.
-- Role-aware student and staff portal dashboards with student registration and name-plus-matricule login.
-- D1-backed, expiring, single-use staff codes entered in the Matricule field, followed by a dedicated staff registration workflow with salted, server-peppered password authentication.
-- Administrator control plane for accounts, staff permissions, access codes, reports, analysis jobs, and audit records.
+- Password-protected student and staff login with optional 30-day remembered sessions and student-only registration.
+- Optional admin-managed XLSX/CSV matricule registry, case-insensitive duplicate prevention, and department selection during registration.
+- D1-backed, expiring, single-use staff codes entered through the login identifier field, followed by a dedicated staff registration workflow.
+- Administrator control plane for accounts, staff permissions, access codes, matricule verification, document requests, reports, analysis jobs, and audit records.
 - Private lecture-note publication, a searchable student library, authenticated downloads, replacement, unpublishing, and deletion.
 - Groq-assisted MCQ draft generation, staff publication, timed student execution, and server-side scoring.
-- Announcements, persistent notifications, configurable Mark/Bio-Data/Other complaints, voting, Lost & Found, and a General Forum that administrators can suspend or reopen.
-- Paid thesis workflow with private R2 files, queued PDF/DOCX extraction, deterministic internal-corpus matching, progress, retries, and source evidence.
+- Announcements, persistent notifications, configurable Mark/Bio-Data/Other complaints, voting, Lost & Found, and department-scoped forums that administrators can suspend per channel.
+- Student document requests with admin comments and private PDF delivery through authenticated R2 downloads.
+- Paid thesis workflow with private R2 files, queued PDF/DOCX extraction, deterministic internal-corpus matching, official admin-published percentages, and staff verification codes.
 - D1-backed records, R2-backed uploads, HttpOnly cookies, audit events, and server-side authorization checks.
 
-Student name-plus-matricule login follows the requested initial workflow but is weaker than a private password or OTP. A future migration should add student passwords or phone OTP while retaining matricule as the account identifier.
+Passwords are salted and hashed in the Cloudflare backend with a server-only pepper. The browser never stores raw passwords or session authority.
 
 ## Local setup
 
