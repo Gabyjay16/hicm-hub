@@ -1,6 +1,6 @@
 import {
   Bell, BookOpen, Building2, CheckSquare, ChevronRight, ClipboardCheck, FileSearch, GraduationCap,
-  Landmark, MessageSquareText, Search, UploadCloud, UsersRound, Vote,
+  FileCheck2, Landmark, MessageSquareText, Search, UploadCloud, UsersRound, Vote,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -36,6 +36,7 @@ function StudentHome({ name }) {
 
         <PortalSection icon={UsersRound} title="Student Services">
           <PortalRow icon={CheckSquare} label="Complaints Desk" to="/complaints" />
+          <PortalRow icon={FileCheck2} label="Document Requests" to="/documents" />
           <PortalRow icon={Search} label="Lost & Found" to="/lost-found" />
         </PortalSection>
 
@@ -80,6 +81,9 @@ function StaffHome({ name }) {
             </div>
           </div>
         </PortalSection>
+        <PortalSection icon={FileSearch} title="Verify Thesis Results">
+          <div className="px-4 pb-5 sm:px-6"><Link to="/verify-thesis" className="btn-secondary w-full"><FileSearch size={18} /> Open result verification</Link></div>
+        </PortalSection>
         <div className="border-t border-slate-200 px-5 py-4 text-sm text-slate-500">Signed in as {name}</div>
       </div>
     </main>
@@ -97,7 +101,7 @@ function Welcome({ setAuthOpen }) {
           <p className="mt-7 text-sm font-extrabold uppercase text-teal-700">Higher Institute of Commerce and Management</p>
           <h1 className="mt-3 font-serif text-4xl font-bold text-navy sm:text-5xl">HICM Portal</h1>
           <p className="mx-auto mt-5 max-w-lg text-base leading-7 text-slate-600">Your secure place for academic tools, student services, campus notices, and the General Forum.</p>
-          <button onClick={() => setAuthOpen(true)} className="btn-primary mt-7 px-7 py-3">Login or register</button>
+          <button onClick={() => setAuthOpen(true)} className="btn-primary mt-7 px-7 py-3">Login</button>
         </div>
         <div className="px-5 py-6 sm:px-8"><h2 className="text-xl font-black text-navy">School Announcements</h2><div className="mt-4 divide-y divide-slate-200 border-y border-slate-200">{announcements.length ? announcements.map((item) => <PublicAnnouncement key={item.id} item={item} />) : <p className="py-8 text-center text-sm text-slate-500">No announcements have been published.</p>}</div></div>
       </section>
