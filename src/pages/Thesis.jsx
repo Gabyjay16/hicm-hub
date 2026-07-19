@@ -56,7 +56,7 @@ export default function Thesis() {
 
   return (
     <div className="page-shell">
-      <PageHeader eyebrow="Academics" title="Premium Thesis & Project Analysis" description="Admin-gated plagiarism and AI writing analysis workflow with payment screenshot verification." />
+      <PageHeader eyebrow="Academics" title="Plagiarism Test" description="Admin-gated AI-assisted originality report with payment screenshot verification." />
 
       {viewRole === "staff" ? (
         <AdminTable requests={data?.requests || []} onReview={review} />
@@ -116,8 +116,8 @@ function StudentWorkflow({ request, processing, onPayment, onUpload }) {
         {request.analysis ? (
           <>
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <Circle label="Plagiarism Detected" value={request.analysis.plagiarism} color="#be123c" />
-              <Circle label="AI Generated Content" value={request.analysis.ai} color="#4f46e5" />
+              <Circle label="Measured Internal Similarity" value={request.analysis.similarity ?? 0} color="#007f7a" />
+              <div className="rounded-lg border border-slate-200 p-5"><p className="font-black text-slate-800">Coverage</p><p className="mt-3 text-sm leading-6 text-slate-600">{request.analysis.coverage}</p></div>
             </div>
             <div className="mt-6 grid gap-3">
               {request.analysis.excerpts.map((excerpt) => (
