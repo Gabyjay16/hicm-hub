@@ -19,7 +19,7 @@ export default function Navbar() {
 
   return (
     <>
-    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/98">
+    <header className="sticky top-0 z-40 isolate border-b border-slate-200 bg-white shadow-sm">
       <nav className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <Link to="/" className="flex items-center gap-3">
           <span className="grid h-12 w-12 place-items-center rounded-sm bg-navy text-white">

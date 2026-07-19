@@ -6,6 +6,7 @@ test("administrator can inspect metrics and issue access codes", async ({ page }
   await page.route("**/api/session", async (route) => route.fulfill({ json: { session: adminSession, candidates: [], channels: ["General", "Marketing"] } }));
   await page.route("**/api/notifications", async (route) => route.fulfill({ json: { notifications: [], unread: 0 } }));
   await page.route("**/api/document-requests", async (route) => route.fulfill({ json: { requests: [] } }));
+  await page.route("**/api/elections", async (route) => route.fulfill({ json: { elections: [] } }));
   await page.route("**/api/admin/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === "POST" && path.endsWith("staff-codes")) return route.fulfill({ status: 201, json: { id: "code-1", code: "STF-ABCD-2345", expiresInHours: 24 } });
@@ -24,4 +25,7 @@ test("administrator can inspect metrics and issue access codes", async ({ page }
   await page.getByRole("button", { name: "Staff Codes" }).click();
   await expect(page.getByText("Issue a single-use registration code")).toBeVisible();
   await page.getByRole("button", { name: "24 hours" }).click();
+  await page.getByRole("button", { name: "Voting" }).click();
+  await expect(page.getByRole("heading", { name: "Create Student Election" })).toBeVisible();
+  await expect(page.getByLabel("Candidate 1 name")).toBeVisible();
 });

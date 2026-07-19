@@ -74,6 +74,7 @@ export async function onRequest(context) {
     if (route === "admin/staff-codes" && request.method === "POST") return await createStaffCode(request, env);
     if (/^admin\/staff-codes\/[^/]+$/.test(route) && request.method === "PATCH") return await revokeStaffCode(route, request, env);
     if (/^admin\/users\/[^/]+$/.test(route) && request.method === "PATCH") return await updateUserAdmin(route, request, env);
+    if (/^admin\/users\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteUserAdmin(route, request, env);
     if (route === "admin/forum/settings" && request.method === "PATCH") return await updateForumSettings(request, env);
     if (route === "admin/forum/settings" && request.method === "GET") return await getForumSettings(request, env);
     if (route === "admin/forum/reports" && request.method === "GET") return await listForumReports(request, env);
@@ -87,6 +88,7 @@ export async function onRequest(context) {
     if (/^admin\/analysis\/[^/]+\/restore-entitlement$/.test(route) && request.method === "POST") return await restoreAnalysisEntitlement(route, request, env);
     if (route === "admin/elections" && request.method === "POST") return await createElection(request, env);
     if (/^admin\/elections\/[^/]+$/.test(route) && request.method === "PATCH") return await updateElection(route, request, env);
+    if (/^admin\/elections\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteElection(route, request, env);
     if (route === "admin/forum/moderation" && request.method === "GET") return await listForumModeration(request, env);
     if (/^admin\/forum\/messages\/[^/]+$/.test(route) && request.method === "PATCH") return await moderateForumMessage(route, request, env);
     if (/^admin\/forum\/users\/[^/]+$/.test(route) && request.method === "PATCH") return await restrictForumUser(route, request, env);
@@ -123,11 +125,13 @@ export async function onRequest(context) {
     if (route === "evaluations" && request.method === "POST") return await createEvaluation(request, env);
     if (/^evaluations\/[^/]+$/.test(route) && request.method === "GET") return await getEvaluation(route, request, env);
     if (/^evaluations\/[^/]+$/.test(route) && request.method === "PATCH") return await updateEvaluationLifecycle(route, request, env);
+    if (/^evaluations\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteEvaluation(route, request, env);
     if (/^evaluations\/[^/]+\/duplicate$/.test(route) && request.method === "POST") return await duplicateEvaluation(route, request, env);
     if (/^evaluations\/[^/]+\/start$/.test(route) && request.method === "POST") return await startEvaluation(route, request, env);
     if (/^evaluations\/[^/]+\/results$/.test(route) && request.method === "GET") return await evaluationResults(route, request, env, false);
     if (/^evaluations\/[^/]+\/export$/.test(route) && request.method === "GET") return await evaluationResults(route, request, env, true);
     if (/^evaluation-attempts\/[^/]+$/.test(route) && request.method === "GET") return await getEvaluationAttempt(route, request, env);
+    if (/^evaluation-attempts\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteEvaluationAttempt(route, request, env);
     if (/^evaluation-attempts\/[^/]+\/answers$/.test(route) && request.method === "PATCH") return await saveEvaluationAnswer(route, request, env);
     if (/^evaluation-attempts\/[^/]+\/submit$/.test(route) && request.method === "POST") return await submitEvaluationAttempt(route, request, env);
 
@@ -285,7 +289,8 @@ async function currentSession(request, env) {
     SELECT sessions.token, sessions.view_role, sessions.csrf_token, sessions.expires_at, users.*,
       COALESCE(staff_permissions.is_admin, 0) AS is_admin,
       COALESCE(staff_permissions.forum_access, 0) AS forum_access,
-      COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
+      COALESCE(staff_permissions.moderation_access, 0) AS moderation_access,
+      COALESCE(staff_permissions.announcement_access, 0) AS announcement_access
     FROM sessions
     JOIN users ON sessions.user_id = users.id
     LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
@@ -347,8 +352,10 @@ function presentSession(session) {
       phone: session.phone,
       department: session.department,
       forumAlias: session.forum_alias,
+      forumDensity: session.forum_density || "compact",
       forumAccess: session.role === "admin" || Boolean(session.forum_access),
       moderationAccess: session.role === "admin" || Boolean(session.moderation_access),
+      announcementAccess: session.role === "admin" || Boolean(session.announcement_access),
     },
   };
 }
@@ -432,7 +439,8 @@ async function authenticate(request, env) {
     user = await env.DB.prepare(`
       SELECT users.*, COALESCE(staff_permissions.is_admin, 0) AS is_admin,
         COALESCE(staff_permissions.forum_access, 0) AS forum_access,
-        COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
+        COALESCE(staff_permissions.moderation_access, 0) AS moderation_access,
+        COALESCE(staff_permissions.announcement_access, 0) AS announcement_access
       FROM users LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
       WHERE (users.role = 'student' AND UPPER(TRIM(users.matricule)) = ?)
          OR (users.role = 'staff' AND LOWER(TRIM(users.name)) = ?)
@@ -596,8 +604,10 @@ async function adminUsers(request, env) {
     SELECT users.id, users.name, users.role, users.position, users.matricule, users.phone, users.department, users.account_status, users.created_at,
       COALESCE(staff_permissions.is_admin, 0) AS is_admin,
       COALESCE(staff_permissions.forum_access, 0) AS forum_access,
-      COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
+      COALESCE(staff_permissions.moderation_access, 0) AS moderation_access,
+      COALESCE(staff_permissions.announcement_access, 0) AS announcement_access
     FROM users LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
+    WHERE users.account_status <> 'deleted'
     ORDER BY users.created_at DESC LIMIT 250
   `).all();
   return json({ users: rows.results });
@@ -693,22 +703,42 @@ async function updateUserAdmin(route, request, env) {
   const session = await requireAdmin(request, env);
   const userId = route.split("/")[2];
   const body = await request.json();
-  const target = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first();
+  const target = await env.DB.prepare(`SELECT users.*, COALESCE(staff_permissions.is_admin, 0) AS is_admin,
+    COALESCE(staff_permissions.forum_access, 0) AS forum_access,
+    COALESCE(staff_permissions.moderation_access, 0) AS moderation_access,
+    COALESCE(staff_permissions.announcement_access, 0) AS announcement_access
+    FROM users LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id WHERE users.id = ?`).bind(userId).first();
   if (!target) return json({ error: "User not found." }, 404);
-  if (target.id === session.id && body.accountStatus === "blocked") return json({ error: "You cannot block your own administrator account." }, 400);
+  if (target.id === session.id && body.accountStatus === "blocked") return json({ error: "You cannot suspend your own administrator account." }, 400);
   const status = body.accountStatus === "blocked" ? "blocked" : "active";
   await env.DB.batch([
     env.DB.prepare("UPDATE users SET account_status = ? WHERE id = ?").bind(status, userId),
     ...(status === "blocked" ? [env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId)] : []),
   ]);
-  if (target.role === "staff") {
-    await env.DB.prepare(`
-      INSERT INTO staff_permissions (user_id, is_admin, forum_access, moderation_access, updated_by, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(user_id) DO UPDATE SET forum_access = excluded.forum_access, moderation_access = excluded.moderation_access, updated_by = excluded.updated_by, updated_at = excluded.updated_at
-    `).bind(userId, 0, body.forumAccess ? 1 : 0, body.moderationAccess ? 1 : 0, session.id, now()).run();
-  }
-  await audit(env, session.id, "user.permissions_updated", "user", userId, { status, forumAccess: Boolean(body.forumAccess), moderationAccess: Boolean(body.moderationAccess) });
+  await env.DB.prepare(`
+    INSERT INTO staff_permissions (user_id, is_admin, forum_access, moderation_access, announcement_access, updated_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET forum_access = excluded.forum_access, moderation_access = excluded.moderation_access, announcement_access = excluded.announcement_access, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+  `).bind(userId, target.is_admin ? 1 : 0, (body.forumAccess ?? Boolean(target.forum_access)) ? 1 : 0, (body.moderationAccess ?? Boolean(target.moderation_access)) ? 1 : 0, (body.announcementAccess ?? Boolean(target.announcement_access)) ? 1 : 0, session.id, now()).run();
+  await audit(env, session.id, "user.permissions_updated", "user", userId, { status, forumAccess: Boolean(body.forumAccess ?? target.forum_access), moderationAccess: Boolean(body.moderationAccess ?? target.moderation_access), announcementAccess: Boolean(body.announcementAccess ?? target.announcement_access) });
+  return adminUsers(request, env);
+}
+
+async function deleteUserAdmin(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const userId = route.split("/")[2];
+  const target = await env.DB.prepare(`SELECT users.*, COALESCE(staff_permissions.is_admin, 0) AS is_admin
+    FROM users LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id WHERE users.id = ? AND users.account_status <> 'deleted'`).bind(userId).first();
+  if (!target) return json({ error: "User not found." }, 404);
+  if (target.id === session.id || target.is_admin) return json({ error: "Administrator accounts cannot be deleted here." }, 400);
+  const timestamp = now();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId),
+    env.DB.prepare(`UPDATE users SET account_status = 'deleted', deleted_at = ?, name = 'Deleted account', normalized_name = NULL,
+      matricule = NULL, phone = '', password_hash = NULL, password_salt = NULL, forum_alias = NULL WHERE id = ?`).bind(timestamp, userId),
+    env.DB.prepare("DELETE FROM staff_permissions WHERE user_id = ?").bind(userId),
+  ]);
+  await audit(env, session.id, "user.deleted", "user", userId, { role: target.role });
   return adminUsers(request, env);
 }
 
@@ -849,15 +879,22 @@ async function listAnnouncements(request, env) {
   const session = await currentSession(request, env);
   const rows = session?.role === "admin"
     ? await env.DB.prepare(`SELECT announcements.*, announcement_reads.read_at FROM announcements LEFT JOIN announcement_reads ON announcement_reads.announcement_id = announcements.id AND announcement_reads.user_id = ? ORDER BY COALESCE(publish_at, created_at) DESC`).bind(session.id).all()
+    : session?.announcement_access
+      ? await env.DB.prepare(`SELECT announcements.*, announcement_reads.read_at FROM announcements LEFT JOIN announcement_reads ON announcement_reads.announcement_id = announcements.id AND announcement_reads.user_id = ?
+        WHERE (announcements.status = 'published' AND datetime(COALESCE(announcements.publish_at, announcements.created_at)) <= CURRENT_TIMESTAMP) OR announcements.author_id = ?
+        ORDER BY COALESCE(announcements.publish_at, announcements.created_at) DESC`).bind(session.id, session.id).all()
     : session
       ? await env.DB.prepare(`SELECT announcements.*, announcement_reads.read_at FROM announcements LEFT JOIN announcement_reads ON announcement_reads.announcement_id = announcements.id AND announcement_reads.user_id = ?
         WHERE announcements.status = 'published' AND datetime(COALESCE(announcements.publish_at, announcements.created_at)) <= CURRENT_TIMESTAMP ORDER BY COALESCE(announcements.publish_at, announcements.created_at) DESC`).bind(session.id).all()
       : await env.DB.prepare(`SELECT announcements.*, NULL AS read_at FROM announcements WHERE status = 'published' AND datetime(COALESCE(publish_at, created_at)) <= CURRENT_TIMESTAMP ORDER BY COALESCE(publish_at, created_at) DESC LIMIT 20`).all();
-  return json({ announcements: rows.results.map((item) => ({ ...item, media_url: item.media_key ? `/api/public/announcements/${encodeURIComponent(item.id)}/media` : null })) });
+  return json({
+    announcements: rows.results.map((item) => ({ ...item, can_manage: Boolean(session && (session.role === "admin" || (session.announcement_access && item.author_id === session.id))), media_url: item.media_key ? `/api/public/announcements/${encodeURIComponent(item.id)}/media` : null })),
+    permissions: { canCreate: Boolean(session && (session.role === "admin" || session.announcement_access)), canManageAll: session?.role === "admin" },
+  });
 }
 
 async function createAnnouncement(request, env) {
-  const session = await requireAdmin(request, env);
+  const session = await requireAnnouncementManager(request, env);
   const contentType = request.headers.get("Content-Type") || "";
   const form = contentType.includes("multipart/form-data") ? await request.formData() : null;
   const raw = form ? { title: form.get("title"), body: form.get("body"), status: form.get("status") || "published", publishAt: form.get("publishAt") || null } : await request.json();
@@ -878,10 +915,11 @@ async function createAnnouncement(request, env) {
 }
 
 async function updateAnnouncement(route, request, env) {
-  const session = await requireAdmin(request, env);
+  const session = await requireAnnouncementManager(request, env);
   const announcementId = route.split("/")[1];
   const current = await env.DB.prepare("SELECT * FROM announcements WHERE id = ?").bind(announcementId).first();
   if (!current) return json({ error: "Announcement not found." }, 404);
+  if (session.role !== "admin" && current.author_id !== session.id) return json({ error: "You can only update announcements you published." }, 403);
   const body = parseBody(announcementSchema, await request.json());
   const status = body.status;
   const publishAt = body.publishAt || (status === "published" ? current.publish_at || now() : null);
@@ -893,13 +931,21 @@ async function updateAnnouncement(route, request, env) {
 }
 
 async function deleteAnnouncement(route, request, env) {
-  const session = await requireAdmin(request, env);
+  const session = await requireAnnouncementManager(request, env);
   const announcementId = route.split("/")[1];
-  const announcement = await env.DB.prepare("SELECT media_key FROM announcements WHERE id = ?").bind(announcementId).first();
+  const announcement = await env.DB.prepare("SELECT author_id, media_key FROM announcements WHERE id = ?").bind(announcementId).first();
+  if (!announcement) return json({ error: "Announcement not found." }, 404);
+  if (session.role !== "admin" && announcement.author_id !== session.id) return json({ error: "You can only delete announcements you published." }, 403);
   await env.DB.prepare("DELETE FROM announcements WHERE id = ?").bind(announcementId).run();
   if (announcement?.media_key && env.UPLOADS) await env.UPLOADS.delete(announcement.media_key);
   await audit(env, session.id, "announcement.deleted", "announcement", announcementId);
   return listAnnouncements(request, env);
+}
+
+async function requireAnnouncementManager(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "admin" && !session.announcement_access) throw Object.assign(new Error("Announcement publishing permission is required."), { status: 403 });
+  return session;
 }
 
 async function readAnnouncementMedia(route, env) {
@@ -1037,22 +1083,24 @@ async function deleteComplaintField(route, request, env) {
 }
 
 async function listQuizzes(request, env) {
-  const session = await currentSession(request, env);
+  const session = await requireSession(request, env);
   const courseCode = new URL(request.url).searchParams.get("courseCode")?.trim().toUpperCase();
   const canReview = session?.role === "staff" || session?.role === "admin";
-  const query = courseCode
-    ? canReview
-      ? env.DB.prepare("SELECT * FROM quizzes WHERE UPPER(COALESCE(course_code, '')) = ? ORDER BY created_at DESC").bind(courseCode)
-      : env.DB.prepare("SELECT * FROM quizzes WHERE UPPER(COALESCE(course_code, '')) = ? AND COALESCE(status, 'published') = 'published' ORDER BY created_at DESC").bind(courseCode)
-    : canReview
-      ? env.DB.prepare("SELECT * FROM quizzes ORDER BY created_at DESC")
-      : env.DB.prepare("SELECT * FROM quizzes WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
+  const query = canReview
+    ? session.role === "admin"
+      ? env.DB.prepare("SELECT * FROM quizzes WHERE (? IS NULL OR UPPER(COALESCE(course_code, '')) = ?) ORDER BY created_at DESC").bind(courseCode || null, courseCode || null)
+      : env.DB.prepare("SELECT * FROM quizzes WHERE owner_id = ? AND (? IS NULL OR UPPER(COALESCE(course_code, '')) = ?) ORDER BY created_at DESC").bind(session.id, courseCode || null, courseCode || null)
+    : env.DB.prepare(`SELECT * FROM quizzes WHERE COALESCE(status, 'published') = 'published'
+        AND (? IS NULL OR UPPER(COALESCE(course_code, '')) = ?)
+        AND (department IS NULL OR department = '' OR department = ?)
+        AND (opens_at IS NULL OR datetime(opens_at) <= CURRENT_TIMESTAMP)
+        AND (closes_at IS NULL OR datetime(closes_at) > CURRENT_TIMESTAMP)
+        ORDER BY created_at DESC`).bind(courseCode || null, courseCode || null, session.department || "");
   const rows = await query.all();
-  return json({ quizzes: rows.results.map((quiz) => ({
-    ...quiz,
-    questions: JSON.parse(quiz.questions_json).map((question) => canReview ? question : withoutAnswer(question)),
-    questions_json: undefined,
-  })) });
+  return json({ quizzes: rows.results.map((quiz) => {
+    const questions = JSON.parse(quiz.questions_json);
+    return { ...quiz, question_count: questions.length, questions: canReview ? questions : undefined, questions_json: undefined };
+  }) });
 }
 
 async function updateQuiz(route, request, env) {
@@ -1065,16 +1113,14 @@ async function updateQuiz(route, request, env) {
     ? await env.DB.prepare("SELECT id FROM quizzes WHERE id = ?").bind(quizId).first()
     : await env.DB.prepare("SELECT id FROM quizzes WHERE id = ? AND owner_id = ?").bind(quizId, session.id).first();
   if (!owned) return json({ error: "Evaluation not found or not owned by this account." }, 404);
-  await env.DB.prepare("UPDATE quizzes SET status = ? WHERE id = ?").bind(status, quizId).run();
+  if (status === "published") await ensureEvaluationQuestions(env, await env.DB.prepare("SELECT * FROM quizzes WHERE id = ?").bind(quizId).first());
+  await env.DB.prepare("UPDATE quizzes SET status = ?, opens_at = CASE WHEN ? = 'published' THEN COALESCE(opens_at, ?) ELSE opens_at END, updated_at = ? WHERE id = ?").bind(status, status, now(), now(), quizId).run();
   await audit(env, session.id, `evaluation.${status}`, "quiz", quizId);
+  if (status === "published") {
+    const quiz = await env.DB.prepare("SELECT course_code, title FROM quizzes WHERE id = ?").bind(quizId).first();
+    await notifyStudents(env, "evaluation", `${quiz.course_code || "Course"} evaluation published`, quiz.title, `/quiz?courseCode=${encodeURIComponent(quiz.course_code || "")}`);
+  }
   return listQuizzes(request, env);
-}
-
-function withoutAnswer(question) {
-  const safeQuestion = { ...question };
-  delete safeQuestion.answer;
-  delete safeQuestion.correctOptionIndex;
-  return safeQuestion;
 }
 
 async function generateQuiz(request, env) {
@@ -1087,6 +1133,9 @@ async function generateQuiz(request, env) {
   const title = String(input.title || "Generated Lecture Quiz").trim();
   const difficulty = String(input.difficulty || "medium");
   const sourceName = String(input.noteName || title);
+  const durationMinutes = Math.max(1, Math.min(240, Number(input.durationMinutes || 30)));
+  const department = String(input.department || "").trim();
+  if (department && !DEPARTMENTS.includes(department)) return json({ error: "Select a valid HICM department." }, 400);
   let questions;
   let generatedBy = "fallback";
   try {
@@ -1100,9 +1149,11 @@ async function generateQuiz(request, env) {
     }
   }
   const quizId = id("quiz");
-  await env.DB.prepare("INSERT INTO quizzes (id, title, questions_json, duration_seconds, created_at, course_code, department, level, semester, academic_year, status, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(quizId, title, JSON.stringify(questions), Math.max(120, requested * 60), now(), courseCode, input.department || null, input.level || null, input.semester || null, input.academicYear || null, "draft", session.id).run();
-  await audit(env, session.id, "evaluation.generated", "quiz", quizId, { generatedBy, count: questions.length, courseCode });
+  const timestamp = now();
+  await env.DB.prepare(`INSERT INTO quizzes (id, title, questions_json, duration_seconds, created_at, course_code, department, level, semester, academic_year, status, owner_id, difficulty, opens_at, attempt_limit, release_mode, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, 1, 'immediate', ?)`)
+    .bind(quizId, title, JSON.stringify(questions), durationMinutes * 60, timestamp, courseCode, department || null, input.level || null, input.semester || null, input.academicYear || null, session.id, difficulty, timestamp, timestamp).run();
+  await audit(env, session.id, "evaluation.generated", "quiz", quizId, { generatedBy, count: questions.length, courseCode, durationMinutes });
   return listQuizzes(request, env);
 }
 
@@ -1183,11 +1234,12 @@ async function listNotes(request, env) {
     WHERE deleted_at IS NULL
       AND (? = 1 OR (published = 1 AND status = 'published'))
       AND (? = 0 OR owner_id = ?)
+      AND (? = 1 OR department = ?)
       AND (course_code LIKE ? COLLATE NOCASE OR course_title LIKE ? COLLATE NOCASE OR lecturer_name LIKE ? COLLATE NOCASE)
       AND (? = '' OR department = ?) AND (? = '' OR level = ?) AND (? = '' OR semester = ?) AND (? = '' OR academic_year = ?)
     ORDER BY created_at DESC LIMIT 100
-  `).bind(manage ? 1 : 0, session.role === "staff" ? 1 : 0, session.id, search, search, search, department, department, level, level, semester, semester, academicYear, academicYear).all();
-  return json({ notes: rows.results.map((note) => ({ ...note, file_url: `/api/files/note/${encodeURIComponent(note.id)}`, download_url: `/api/files/note/${encodeURIComponent(note.id)}?download=1` })) });
+  `).bind(manage ? 1 : 0, session.role === "staff" ? 1 : 0, session.id, manage ? 1 : 0, session.department || "", search, search, search, department, department, level, level, semester, semester, academicYear, academicYear).all();
+  return json({ notes: rows.results.map((note) => ({ ...note, file_url: `/api/files/note/${encodeURIComponent(note.id)}`, download_url: `/api/files/note/${encodeURIComponent(note.id)}?download=1` })), scopeDepartment: manage ? null : session.department || null });
 }
 
 async function publishNote(request, env) {
@@ -1197,6 +1249,7 @@ async function publishNote(request, env) {
   const file = form.get("note");
   const required = ["courseCode", "courseTitle", "department", "level", "semester", "academicYear"];
   if (required.some((field) => !String(form.get(field) || "").trim())) return json({ error: "Complete every academic field before publishing." }, 400);
+  if (!DEPARTMENTS.includes(String(form.get("department")).trim())) return json({ error: "Select a valid HICM department." }, 400);
   const fileError = await validateDocument(file, 20 * 1024 * 1024);
   if (fileError) return json({ error: fileError }, 400);
   const objectKey = await storeUpload(env, file, "lecture-notes");
@@ -1317,7 +1370,8 @@ async function listElections(request, env) {
       WHERE election_candidates.election_id = ? GROUP BY election_candidates.id ORDER BY election_candidates.created_at`).bind(election.id).all();
     const myVote = session.role === "student" ? await env.DB.prepare("SELECT candidate_id FROM election_votes WHERE election_id = ? AND student_user_id = ?").bind(election.id, session.id).first() : null;
     const timing = Date.now() < Date.parse(election.opens_at) ? "upcoming" : Date.now() >= Date.parse(election.closes_at) || ["closed", "archived"].includes(election.status) ? "closed" : election.status === "published" ? "open" : election.status;
-    elections.push({ ...election, timing, myVote: myVote?.candidate_id || null, candidates: candidates.results.map((candidate) => ({ ...candidate, vote_count: session.role === "admin" || timing === "closed" ? candidate.vote_count : undefined, image_url: candidate.image_key ? `/api/files/${encodeURIComponent(candidate.image_key)}` : null })) });
+    const canSeeResults = session.role === "admin" || timing === "closed" || Boolean(election.show_live_results);
+    elections.push({ ...election, timing, myVote: myVote?.candidate_id || null, results_visible: canSeeResults, candidates: candidates.results.map((candidate) => ({ ...candidate, vote_count: canSeeResults ? candidate.vote_count : undefined, image_url: candidate.image_key ? `/api/files/${encodeURIComponent(candidate.image_key)}` : null })) });
   }
   return json({ elections });
 }
@@ -1333,7 +1387,7 @@ async function createElection(request, env) {
   const electionId = id("election");
   const timestamp = now();
   const status = ["draft", "published"].includes(body.status) ? body.status : "draft";
-  const statements = [env.DB.prepare("INSERT INTO elections (id, title, description, status, opens_at, closes_at, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(electionId, title, String(body.description || "").trim().slice(0, 2000), status, new Date(opensAt).toISOString(), new Date(closesAt).toISOString(), session.id, timestamp, timestamp)];
+  const statements = [env.DB.prepare("INSERT INTO elections (id, title, description, status, opens_at, closes_at, created_by, created_at, updated_at, show_live_results) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(electionId, title, String(body.description || "").trim().slice(0, 2000), status, new Date(opensAt).toISOString(), new Date(closesAt).toISOString(), session.id, timestamp, timestamp, body.showLiveResults ? 1 : 0)];
   for (const candidate of candidates) {
     if (!String(candidate.name || "").trim()) return json({ error: "Every candidate needs a name." }, 400);
     statements.push(env.DB.prepare("INSERT INTO election_candidates (id, election_id, name, position_title, manifesto, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id("candidate"), electionId, String(candidate.name).trim(), String(candidate.positionTitle || title).trim(), String(candidate.manifesto || "").trim().slice(0, 3000), timestamp));
@@ -1348,10 +1402,28 @@ async function updateElection(route, request, env) {
   const session = await requireAdmin(request, env);
   const electionId = route.split("/")[2];
   const body = await request.json();
-  const status = ["draft", "published", "closed", "archived"].includes(body.status) ? body.status : null;
+  const current = await env.DB.prepare("SELECT * FROM elections WHERE id = ?").bind(electionId).first();
+  if (!current) return json({ error: "Election not found." }, 404);
+  const status = body.status === undefined ? current.status : ["draft", "published", "closed", "archived"].includes(body.status) ? body.status : null;
   if (!status) return json({ error: "Invalid election status." }, 400);
-  await env.DB.prepare("UPDATE elections SET status = ?, updated_at = ? WHERE id = ?").bind(status, now(), electionId).run();
-  await audit(env, session.id, `election.${status}`, "election", electionId);
+  const showLiveResults = body.showLiveResults === undefined ? Boolean(current.show_live_results) : Boolean(body.showLiveResults);
+  await env.DB.prepare("UPDATE elections SET status = ?, show_live_results = ?, updated_at = ? WHERE id = ?").bind(status, showLiveResults ? 1 : 0, now(), electionId).run();
+  await audit(env, session.id, "election.updated", "election", electionId, { status, showLiveResults });
+  if (status === "published" && current.status !== "published") await notifyStudents(env, "election", "Student election published", current.title, `/voting?election=${encodeURIComponent(electionId)}`);
+  return listElections(request, env);
+}
+
+async function deleteElection(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const electionId = route.split("/")[2];
+  const election = await env.DB.prepare("SELECT id FROM elections WHERE id = ?").bind(electionId).first();
+  if (!election) return json({ error: "Election not found." }, 404);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM election_votes WHERE election_id = ?").bind(electionId),
+    env.DB.prepare("DELETE FROM election_candidates WHERE election_id = ?").bind(electionId),
+    env.DB.prepare("DELETE FROM elections WHERE id = ?").bind(electionId),
+  ]);
+  await audit(env, session.id, "election.deleted", "election", electionId);
   return listElections(request, env);
 }
 
@@ -1600,26 +1672,28 @@ function presentForumMessage(message, session) {
 
 async function updateForumProfile(request, env) {
   const session = await requireSession(request, env);
-  if (session.role !== "student") return json({ error: "Forum usernames are available to student accounts." }, 403);
   const body = await request.json();
-  const useAlias = Boolean(body.useAlias);
-  let alias = useAlias ? String(body.alias || "").trim().replace(/\s+/g, " ") : null;
-  if (useAlias && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{2,29}$/.test(alias)) return json({ error: "Use 3-30 letters, numbers, spaces, dots, dashes, or underscores." }, 400);
-  if (useAlias && /(?:^|\b)(?:admin|administrator|moderator|staff|official|hicm)(?:\b|$)/i.test(alias)) return json({ error: "Choose a username that cannot be mistaken for an official account." }, 400);
-  if (useAlias) {
+  const density = ["compact", "standard"].includes(body.density) ? body.density : session.forum_density || "compact";
+  const useAlias = session.role === "student" && Boolean(body.useAlias);
+  const alias = useAlias ? String(body.alias || "").trim().replace(/\s+/g, " ") : null;
+  if (session.role === "student" && useAlias && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{2,29}$/.test(alias)) return json({ error: "Use 3-30 letters, numbers, spaces, dots, dashes, or underscores." }, 400);
+  if (session.role === "student" && useAlias && /(?:^|\b)(?:admin|administrator|moderator|staff|official|hicm)(?:\b|$)/i.test(alias)) return json({ error: "Choose a username that cannot be mistaken for an official account." }, 400);
+  if (session.role === "student" && useAlias) {
     const conflict = await env.DB.prepare("SELECT id FROM users WHERE id <> ? AND (forum_alias = ? COLLATE NOCASE OR name = ? COLLATE NOCASE) LIMIT 1").bind(session.id, alias, alias).first();
     if (conflict) return json({ error: "That forum username is already in use." }, 409);
   }
   try {
-    await env.DB.batch([
-      env.DB.prepare("UPDATE users SET forum_alias = ?, forum_alias_updated_at = ? WHERE id = ?").bind(alias, now(), session.id),
-      env.DB.prepare("UPDATE messages SET author = ? WHERE user_id = ?").bind(alias || session.name, session.id),
-    ]);
+    const statements = [env.DB.prepare("UPDATE users SET forum_density = ? WHERE id = ?").bind(density, session.id)];
+    if (session.role === "student") {
+      statements.push(env.DB.prepare("UPDATE users SET forum_alias = ?, forum_alias_updated_at = ? WHERE id = ?").bind(alias, now(), session.id));
+      statements.push(env.DB.prepare("UPDATE messages SET author = ? WHERE user_id = ?").bind(alias || session.name, session.id));
+    }
+    await env.DB.batch(statements);
   } catch (error) {
     if (String(error.message).includes("UNIQUE")) return json({ error: "That forum username is already in use." }, 409);
     throw error;
   }
-  await audit(env, session.id, "forum.alias_updated", "user", session.id, { usingAlias: Boolean(alias) });
+  await audit(env, session.id, "forum.profile_updated", "user", session.id, { usingAlias: Boolean(alias), density });
   return getSessionResponse(request, env);
 }
 
@@ -1931,6 +2005,7 @@ async function readFile(route, request, env) {
     const noteId = key.slice(5);
     const note = await env.DB.prepare("SELECT * FROM lecture_notes WHERE id = ? AND deleted_at IS NULL").bind(noteId).first();
     if (!note) return json({ error: "File not found." }, 404);
+    if (session.role === "student" && note.department !== session.department) return json({ error: "This lecture note belongs to another department." }, 403);
     if (!(note.published && note.status === "published") && session.role !== "admin" && note.owner_id !== session.id) return json({ error: "You do not have permission to view this note." }, 403);
     const activeFile = await env.DB.prepare("SELECT * FROM lecture_note_files WHERE note_id = ? AND active = 1 ORDER BY version_number DESC LIMIT 1").bind(noteId).first();
     key = activeFile?.object_key || note.object_key;
@@ -2082,6 +2157,25 @@ async function duplicateEvaluation(route, request, env) {
   return createEvaluation(replacement, env);
 }
 
+async function deleteEvaluation(route, request, env) {
+  const session = await requireStaff(request, env);
+  const evaluationId = route.split("/")[1];
+  const evaluation = session.role === "admin"
+    ? await env.DB.prepare("SELECT id FROM quizzes WHERE id = ?").bind(evaluationId).first()
+    : await env.DB.prepare("SELECT id FROM quizzes WHERE id = ? AND owner_id = ?").bind(evaluationId, session.id).first();
+  if (!evaluation) return json({ error: "Evaluation not found or not owned by this account." }, 404);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM evaluation_answers WHERE attempt_id IN (SELECT id FROM evaluation_attempts WHERE evaluation_id = ?)").bind(evaluationId),
+    env.DB.prepare("DELETE FROM evaluation_attempts WHERE evaluation_id = ?").bind(evaluationId),
+    env.DB.prepare("DELETE FROM quiz_attempts WHERE quiz_id = ?").bind(evaluationId),
+    env.DB.prepare("DELETE FROM evaluation_options WHERE question_id IN (SELECT id FROM evaluation_questions WHERE evaluation_id = ?)").bind(evaluationId),
+    env.DB.prepare("DELETE FROM evaluation_questions WHERE evaluation_id = ?").bind(evaluationId),
+    env.DB.prepare("DELETE FROM quizzes WHERE id = ?").bind(evaluationId),
+  ]);
+  await audit(env, session.id, "evaluation.deleted", "evaluation", evaluationId);
+  return listQuizzes(request, env);
+}
+
 async function startEvaluation(route, request, env) {
   const session = await requireSession(request, env);
   if (session.role !== "student") return json({ error: "Only student accounts can start an evaluation." }, 403);
@@ -2188,6 +2282,29 @@ async function submitEvaluationAttempt(route, request, env) {
   return getEvaluationAttempt(`evaluation-attempts/${attemptId}`, request, env);
 }
 
+async function deleteEvaluationAttempt(route, request, env) {
+  const session = await requireStaff(request, env);
+  const attemptId = route.split("/")[1];
+  const attempt = await env.DB.prepare(`SELECT evaluation_attempts.id, evaluation_attempts.evaluation_id, quizzes.owner_id
+    FROM evaluation_attempts JOIN quizzes ON quizzes.id = evaluation_attempts.evaluation_id WHERE evaluation_attempts.id = ?`).bind(attemptId).first();
+  if (attempt) {
+    if (session.role !== "admin" && attempt.owner_id !== session.id) return json({ error: "You do not own this evaluation record." }, 403);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM evaluation_answers WHERE attempt_id = ?").bind(attemptId),
+      env.DB.prepare("DELETE FROM evaluation_attempts WHERE id = ?").bind(attemptId),
+    ]);
+    await audit(env, session.id, "evaluation.attempt_deleted", "evaluation_attempt", attemptId, { evaluationId: attempt.evaluation_id });
+    return json({ ok: true });
+  }
+  const legacy = await env.DB.prepare(`SELECT quiz_attempts.id, quiz_attempts.quiz_id AS evaluation_id, quizzes.owner_id
+    FROM quiz_attempts JOIN quizzes ON quizzes.id = quiz_attempts.quiz_id WHERE quiz_attempts.id = ?`).bind(attemptId).first();
+  if (!legacy) return json({ error: "Evaluation record not found." }, 404);
+  if (session.role !== "admin" && legacy.owner_id !== session.id) return json({ error: "You do not own this evaluation record." }, 403);
+  await env.DB.prepare("DELETE FROM quiz_attempts WHERE id = ?").bind(attemptId).run();
+  await audit(env, session.id, "evaluation.attempt_deleted", "quiz_attempt", attemptId, { evaluationId: legacy.evaluation_id });
+  return json({ ok: true });
+}
+
 async function finishEvaluationAttempt(env, attempt, reason) {
   const answers = await env.DB.prepare(`SELECT evaluation_answers.selected_option_index, evaluation_questions.correct_option_index, evaluation_questions.marks
     FROM evaluation_questions LEFT JOIN evaluation_answers ON evaluation_answers.question_id = evaluation_questions.id AND evaluation_answers.attempt_id = ?
@@ -2207,9 +2324,15 @@ async function evaluationResults(route, request, env, exportCsv) {
   const rows = await env.DB.prepare(`SELECT evaluation_attempts.*, users.name, users.matricule,
     CAST((julianday(COALESCE(submitted_at, updated_at)) - julianday(started_at)) * 86400 AS INTEGER) AS completion_seconds
     FROM evaluation_attempts JOIN users ON users.id = evaluation_attempts.student_user_id WHERE evaluation_id = ? ORDER BY created_at DESC`).bind(evaluationId).all();
-  if (!exportCsv) return json({ attempts: rows.results });
+  const legacyRows = await env.DB.prepare(`SELECT quiz_attempts.id, quiz_attempts.quiz_id AS evaluation_id, quiz_attempts.user_id AS student_user_id,
+    1 AS attempt_number, quiz_attempts.created_at AS started_at, quiz_attempts.created_at AS deadline_at, quiz_attempts.created_at AS submitted_at,
+    'submitted' AS submit_reason, 'submitted' AS status, quiz_attempts.score, quiz_attempts.total AS total_marks,
+    quiz_attempts.created_at, quiz_attempts.created_at AS updated_at, users.name, users.matricule, 0 AS completion_seconds
+    FROM quiz_attempts LEFT JOIN users ON users.id = quiz_attempts.user_id WHERE quiz_attempts.quiz_id = ? ORDER BY quiz_attempts.created_at DESC`).bind(evaluationId).all();
+  const attempts = [...rows.results, ...legacyRows.results].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  if (!exportCsv) return json({ attempts });
   const escape = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  const csv = ["Student,Matricule,Attempt,Status,Score,Total,Completion seconds,Submitted", ...rows.results.map((row) => [row.name, row.matricule, row.attempt_number, row.status, row.score, row.total_marks, row.completion_seconds, row.submitted_at].map(escape).join(","))].join("\n");
+  const csv = ["Student,Matricule,Attempt,Status,Score,Total,Completion seconds,Submitted", ...attempts.map((row) => [row.name, row.matricule, row.attempt_number, row.status, row.score, row.total_marks, row.completion_seconds, row.submitted_at].map(escape).join(","))].join("\n");
   return new Response(csv, { headers: { ...securityHeaders(), "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${safeFilename(owned.title)}-results.csv"` } });
 }
 

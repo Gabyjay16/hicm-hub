@@ -12,9 +12,9 @@ Report security concerns privately to the HICM Portal administrator. Do not post
 - Role checks based on persisted account roles.
 - Security response headers and no-store private file responses.
 
-## Known authentication limitation
+## Authentication
 
-Student login currently uses name plus matricule as explicitly requested. This is not equivalent to a private password. Add a password or phone OTP before handling high-risk institutional data at scale. Staff onboarding uses a bootstrap code; production administrators should rotate it after each onboarding window and replace it with one-time D1-backed codes as the admin dashboard matures.
+Students sign in with matricule and password. Staff sign in with their registered name and password after completing a single-use, expiring D1-backed registration-code flow. Administrators can suspend or delete accounts and revoke their active sessions.
 
 ## Secret rotation
 

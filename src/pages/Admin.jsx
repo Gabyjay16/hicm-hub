@@ -1,4 +1,4 @@
-import { Activity, Ban, Check, ClipboardList, FileCheck2, FileSpreadsheet, ImagePlus, KeyRound, Mic, RefreshCw, ShieldCheck, Trash2, Upload, Users, X } from "lucide-react";
+import { Activity, Ban, Check, ClipboardList, FileCheck2, FileSpreadsheet, ImagePlus, KeyRound, Mic, Plus, RefreshCw, ShieldCheck, Trash2, Upload, Users, Vote, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
@@ -7,19 +7,19 @@ import { useApp } from "../context/AppContext";
 import { api, deleteJson, patchJson, postJson } from "../utils/api";
 import { readMatricules } from "../utils/matriculeFile";
 
-const tabs = ["Overview", "Users", "Student Registry", "Staff Codes", "Documents", "Forum", "Analysis", "Audit", "Security"];
+const tabs = ["Overview", "Users", "Student Registry", "Staff Codes", "Voting", "Documents", "Forum", "Analysis", "Audit", "Security"];
 
 export default function Admin() {
   const { user, setToast, setAuthOpen } = useApp();
   const [tab, setTab] = useState("Overview");
-  const [data, setData] = useState({ metrics: {}, users: [], codes: [], reports: [], jobs: [], logs: [], forumSettings: [], registry: {}, documentRequests: [] });
+  const [data, setData] = useState({ metrics: {}, users: [], codes: [], elections: [], reports: [], jobs: [], logs: [], forumSettings: [], registry: {}, documentRequests: [] });
   const [loading, setLoading] = useState(true);
 
   async function load() {
     setLoading(true);
-    const endpoints = ["/admin/overview", "/admin/users", "/admin/staff-codes", "/admin/forum/reports", "/admin/analysis", "/admin/audit", "/admin/forum/settings", "/admin/matricule-registry", "/document-requests"];
-    const [overview, users, codes, reports, jobs, logs, forumSettings, registry, documents] = await Promise.all(endpoints.map((path) => api(path)));
-    setData({ metrics: overview.metrics, users: users.users, codes: codes.codes, reports: reports.reports, jobs: jobs.jobs, logs: logs.logs, forumSettings: forumSettings.settings || [], registry, documentRequests: documents.requests || [] });
+    const endpoints = ["/admin/overview", "/admin/users", "/admin/staff-codes", "/elections", "/admin/forum/reports", "/admin/analysis", "/admin/audit", "/admin/forum/settings", "/admin/matricule-registry", "/document-requests"];
+    const [overview, users, codes, elections, reports, jobs, logs, forumSettings, registry, documents] = await Promise.all(endpoints.map((path) => api(path)));
+    setData({ metrics: overview.metrics, users: users.users, codes: codes.codes, elections: elections.elections || [], reports: reports.reports, jobs: jobs.jobs, logs: logs.logs, forumSettings: forumSettings.settings || [], registry, documentRequests: documents.requests || [] });
     setLoading(false);
   }
 
@@ -35,7 +35,11 @@ export default function Admin() {
   const actions = {
     createCode: async (hours) => perform(async () => { const result = await postJson("/admin/staff-codes", { expiresInHours: hours }); await navigator.clipboard?.writeText(result.code); setToast(`Single-use code ${result.code} created and copied`); }, ""),
     revokeCode: (codeId) => perform(() => patchJson(`/admin/staff-codes/${codeId}`, { revoked: true }), "Staff access code revoked"),
-    updateUser: (account, changes) => perform(() => patchJson(`/admin/users/${account.id}`, { accountStatus: changes.accountStatus ?? account.account_status, forumAccess: changes.forumAccess ?? Boolean(account.forum_access), moderationAccess: changes.moderationAccess ?? Boolean(account.moderation_access) }), "Account controls updated"),
+    updateUser: (account, changes) => perform(() => patchJson(`/admin/users/${account.id}`, { accountStatus: changes.accountStatus ?? account.account_status, forumAccess: changes.forumAccess ?? Boolean(account.forum_access), moderationAccess: changes.moderationAccess ?? Boolean(account.moderation_access), announcementAccess: changes.announcementAccess ?? Boolean(account.announcement_access) }), "Account controls updated"),
+    deleteUser: (account) => perform(() => deleteJson(`/admin/users/${account.id}`), `${account.name}'s account deleted`),
+    createElection: (values) => perform(() => postJson("/admin/elections", values), "Election created"),
+    updateElection: (election, changes) => perform(() => patchJson(`/admin/elections/${election.id}`, changes), "Election updated"),
+    deleteElection: (election) => perform(() => deleteJson(`/admin/elections/${election.id}`), "Election deleted"),
     reviewReport: (reportId, status) => perform(() => patchJson(`/admin/forum/reports/${reportId}`, { status }), "Forum report updated"),
     updateForumSettings: (channel, changes) => perform(() => patchJson("/admin/forum/settings", { channel, ...changes }), `${channel} settings updated`),
     updateRegistry: (changes) => perform(() => patchJson("/admin/matricule-registry/settings", changes), changes.enforced ? "Matricule verification enabled" : "Matricule verification disabled"),
@@ -62,9 +66,10 @@ export default function Admin() {
 
 function AdminTab({ tab, data, actions, changePassword }) {
   if (tab === "Overview") return <Overview metrics={data.metrics} />;
-  if (tab === "Users") return <UsersTable users={data.users} updateUser={actions.updateUser} />;
+  if (tab === "Users") return <UsersTable users={data.users} updateUser={actions.updateUser} deleteUser={actions.deleteUser} />;
   if (tab === "Student Registry") return <RegistryAdmin registry={data.registry} actions={actions} />;
   if (tab === "Staff Codes") return <Codes codes={data.codes} createCode={actions.createCode} revokeCode={actions.revokeCode} />;
+  if (tab === "Voting") return <ElectionAdmin elections={data.elections} actions={actions} />;
   if (tab === "Documents") return <DocumentAdmin requests={data.documentRequests} onReview={actions.reviewDocument} />;
   if (tab === "Forum") return <ForumAdmin reports={data.reports} settings={data.forumSettings} reviewReport={actions.reviewReport} updateSettings={actions.updateForumSettings} />;
   if (tab === "Analysis") return <AnalysisJobs jobs={data.jobs} publishResult={actions.publishResult} />;
@@ -77,8 +82,9 @@ function Overview({ metrics }) {
   return <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{items.map(([label, value, Icon]) => <div key={label} className="panel p-5"><Icon size={21} className="text-teal-700" /><p className="mt-4 text-3xl font-black text-navy">{value ?? 0}</p><p className="mt-1 text-sm font-semibold text-slate-500">{label}</p></div>)}</div>;
 }
 
-function UsersTable({ users, updateUser }) {
-  return <Table headers={["Account", "Role", "Department", "Status", "Forum", "Moderation", "Actions"]}>{users.map((account) => <tr key={account.id} className="border-t border-slate-200"><td className="p-4"><p className="font-bold">{account.name}</p><p className="text-xs text-slate-500">{account.matricule || account.position}</p></td><td className="p-4 capitalize">{account.is_admin ? "admin" : account.role}</td><td className="p-4 text-sm">{account.department || "-"}</td><td className="p-4"><StatusBadge status={account.account_status} /></td><td className="p-4">{account.role === "staff" ? <Toggle checked={Boolean(account.forum_access || account.is_admin)} disabled={Boolean(account.is_admin)} onChange={(checked) => updateUser(account, { forumAccess: checked })} label="Forum access" /> : "Student"}</td><td className="p-4">{account.role === "staff" ? <Toggle checked={Boolean(account.moderation_access || account.is_admin)} disabled={Boolean(account.is_admin)} onChange={(checked) => updateUser(account, { moderationAccess: checked })} label="Moderation access" /> : "-"}</td><td className="p-4"><button onClick={() => updateUser(account, { accountStatus: account.account_status === "blocked" ? "active" : "blocked" })} className="btn-secondary px-3 py-1.5" disabled={Boolean(account.is_admin)}>{account.account_status === "blocked" ? <Check size={15} /> : <Ban size={15} />}{account.account_status === "blocked" ? "Activate" : "Block"}</button></td></tr>)}</Table>;
+function UsersTable({ users, updateUser, deleteUser }) {
+  function remove(account) { if (confirm(`Permanently disable and remove ${account.name}'s account?`)) deleteUser(account); }
+  return <Table headers={["Account", "Role", "Department", "Status", "Forum", "Moderation", "Announcements", "Actions"]}>{users.map((account) => <tr key={account.id} className="border-t border-slate-200"><td className="p-4"><p className="font-bold">{account.name}</p><p className="text-xs text-slate-500">{account.matricule || account.position}</p></td><td className="p-4 capitalize">{account.is_admin ? "admin" : account.role}</td><td className="p-4 text-sm">{account.department || "-"}</td><td className="p-4"><StatusBadge status={account.account_status} /></td><td className="p-4">{account.role === "staff" ? <Toggle checked={Boolean(account.forum_access || account.is_admin)} disabled={Boolean(account.is_admin)} onChange={(checked) => updateUser(account, { forumAccess: checked })} label={`Forum access for ${account.name}`} /> : "Department only"}</td><td className="p-4">{account.role === "staff" ? <Toggle checked={Boolean(account.moderation_access || account.is_admin)} disabled={Boolean(account.is_admin)} onChange={(checked) => updateUser(account, { moderationAccess: checked })} label={`Moderation access for ${account.name}`} /> : "-"}</td><td className="p-4"><Toggle checked={Boolean(account.announcement_access || account.is_admin)} disabled={Boolean(account.is_admin)} onChange={(checked) => updateUser(account, { announcementAccess: checked })} label={`Announcement permission for ${account.name}`} /></td><td className="p-4"><div className="flex gap-2"><button onClick={() => updateUser(account, { accountStatus: account.account_status === "blocked" ? "active" : "blocked" })} className="btn-secondary px-3 py-1.5" disabled={Boolean(account.is_admin)}>{account.account_status === "blocked" ? <Check size={15} /> : <Ban size={15} />}{account.account_status === "blocked" ? "Activate" : "Suspend"}</button><button onClick={() => remove(account)} className="grid h-9 w-9 place-items-center rounded-md border border-rose-200 text-rose-700" disabled={Boolean(account.is_admin)} aria-label={`Delete ${account.name}`} title="Delete account"><Trash2 size={16} /></button></div></td></tr>)}</Table>;
 }
 
 function RegistryAdmin({ registry, actions }) {
@@ -98,6 +104,37 @@ function RegistryAdmin({ registry, actions }) {
 
 function Codes({ codes, createCode, revokeCode }) {
   return <div className="grid gap-5"><div className="panel flex flex-wrap items-center justify-between gap-4 p-5"><div><h2 className="font-black text-navy">Issue a single-use registration code</h2><p className="mt-1 text-sm text-slate-500">The code expires automatically and is consumed by one staff account.</p></div><div className="flex gap-2"><button onClick={() => createCode(24)} className="btn-primary"><KeyRound size={17} /> 24 hours</button><button onClick={() => createCode(168)} className="btn-secondary">7 days</button></div></div><Table headers={["Code", "Created by", "Expires", "State", "Action"]}>{codes.map((code) => { const state = code.used_at ? "Used" : code.revoked_at ? "Revoked" : new Date(code.expires_at) < new Date() ? "Expired" : "Active"; return <tr key={code.id} className="border-t border-slate-200"><td className="p-4 font-mono font-bold">{code.code}</td><td className="p-4">{code.creator_name || "System"}</td><td className="p-4 text-sm">{new Date(code.expires_at).toLocaleString()}</td><td className="p-4"><StatusBadge status={state} /></td><td className="p-4">{state === "Active" && <button onClick={() => revokeCode(code.id)} className="btn-secondary px-3 py-1.5"><X size={15} /> Revoke</button>}</td></tr>; })}</Table></div>;
+}
+
+function ElectionAdmin({ elections, actions }) {
+  const [candidates, setCandidates] = useState([{ name: "", positionTitle: "", manifesto: "" }, { name: "", positionTitle: "", manifesto: "" }]);
+  async function submit(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    await actions.createElection({
+      title: form.get("title"),
+      description: form.get("description"),
+      opensAt: new Date(form.get("opensAt")).toISOString(),
+      closesAt: new Date(form.get("closesAt")).toISOString(),
+      status: form.get("status"),
+      showLiveResults: form.get("showLiveResults") === "on",
+      candidates,
+    });
+    formElement.reset();
+    setCandidates([{ name: "", positionTitle: "", manifesto: "" }, { name: "", positionTitle: "", manifesto: "" }]);
+  }
+  function updateCandidate(index, field, value) { setCandidates((current) => current.map((candidate, position) => position === index ? { ...candidate, [field]: value } : candidate)); }
+  function removeCandidate(index) { if (candidates.length > 2) setCandidates((current) => current.filter((_, position) => position !== index)); }
+  function removeElection(election) { if (confirm(`Delete ${election.title} and all its votes?`)) actions.deleteElection(election); }
+
+  return <div className="grid gap-6"><form onSubmit={submit} className="panel p-5"><div className="flex items-center gap-3"><span className="portal-icon-ring"><Vote size={20} /></span><div><h2 className="font-black text-navy">Create Student Election</h2><p className="text-sm text-slate-500">Add candidates and control the voting window.</p></div></div><div className="mt-5 grid gap-4 sm:grid-cols-2"><label className="grid gap-1 sm:col-span-2"><span className="label">Election title</span><input className="field" name="title" required /></label><label className="grid gap-1 sm:col-span-2"><span className="label">Description</span><textarea className="field min-h-20" name="description" /></label><label className="grid gap-1"><span className="label">Opens</span><input className="field" name="opensAt" type="datetime-local" defaultValue={localDateTime(0)} required /></label><label className="grid gap-1"><span className="label">Closes</span><input className="field" name="closesAt" type="datetime-local" defaultValue={localDateTime(168)} required /></label></div><div className="mt-6 border-y border-slate-200"><div className="flex items-center justify-between py-3"><h3 className="font-black text-navy">Candidates</h3><button type="button" onClick={() => setCandidates((current) => [...current, { name: "", positionTitle: "", manifesto: "" }])} className="btn-secondary px-3 py-1.5"><Plus size={16} /> Add Candidate</button></div>{candidates.map((candidate, index) => <div key={index} className="grid gap-3 border-t border-slate-200 py-4 lg:grid-cols-[minmax(180px,0.8fr)_minmax(180px,0.8fr)_minmax(260px,1.4fr)_auto]"><input className="field" value={candidate.name} onChange={(event) => updateCandidate(index, "name", event.target.value)} placeholder="Student name" aria-label={`Candidate ${index + 1} name`} required /><input className="field" value={candidate.positionTitle} onChange={(event) => updateCandidate(index, "positionTitle", event.target.value)} placeholder="Position" aria-label={`Candidate ${index + 1} position`} required /><input className="field" value={candidate.manifesto} onChange={(event) => updateCandidate(index, "manifesto", event.target.value)} placeholder="Short manifesto" aria-label={`Candidate ${index + 1} manifesto`} /><button type="button" onClick={() => removeCandidate(index)} disabled={candidates.length <= 2} className="grid h-10 w-10 place-items-center text-rose-700 disabled:text-slate-300" aria-label={`Remove candidate ${index + 1}`}><Trash2 size={17} /></button></div>)}</div><div className="mt-5 flex flex-wrap items-center gap-5"><label className="flex items-center gap-2 text-sm font-bold text-slate-700"><input type="checkbox" name="showLiveResults" /> Show statistics while voting is open</label><select className="field w-auto" name="status" defaultValue="published" aria-label="Initial election status"><option value="published">Publish now</option><option value="draft">Save draft</option></select><button className="btn-primary sm:ml-auto"><Vote size={17} /> Create Election</button></div></form><div className="grid gap-4">{elections.map((election) => <section key={election.id} className="panel overflow-hidden"><div className="flex flex-wrap items-start gap-4 border-b border-slate-200 p-5"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-navy">{election.title}</h2><StatusBadge status={election.timing || election.status} /></div><p className="mt-1 text-sm text-slate-500">{new Date(election.opens_at).toLocaleString()} to {new Date(election.closes_at).toLocaleString()}</p></div><label className="flex items-center gap-2 text-xs font-bold text-slate-600">Live statistics <Toggle checked={Boolean(election.show_live_results)} onChange={(showLiveResults) => actions.updateElection(election, { showLiveResults })} label={`Live voting statistics for ${election.title}`} /></label><select className="field w-auto" value={election.status} onChange={(event) => actions.updateElection(election, { status: event.target.value })} aria-label={`Status for ${election.title}`}><option value="draft">Draft</option><option value="published">Published</option><option value="closed">Closed</option><option value="archived">Archived</option></select><button onClick={() => removeElection(election)} className="grid h-10 w-10 place-items-center rounded-md border border-rose-200 text-rose-700" aria-label={`Delete election ${election.title}`} title="Delete election"><Trash2 size={17} /></button></div><div className="divide-y divide-slate-200">{election.candidates.map((candidate) => <div key={candidate.id} className="flex items-center gap-4 px-5 py-3"><div className="min-w-0 flex-1"><p className="font-bold text-navy">{candidate.name}</p><p className="text-xs text-slate-500">{candidate.position_title}</p></div><span className="font-black text-teal-800">{candidate.vote_count || 0} votes</span></div>)}</div></section>)}{!elections.length && <div className="panel p-8 text-center text-sm text-slate-500">No elections have been created.</div>}</div></div>;
+}
+
+function localDateTime(hoursFromNow) {
+  const date = new Date(Date.now() + hoursFromNow * 60 * 60 * 1000);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
 }
 
 function DocumentAdmin({ requests, onReview }) {

@@ -10,11 +10,11 @@ No credentials, votes, application records, or session authority are stored in L
 - Password-protected student and staff login with optional 30-day remembered sessions and student-only registration.
 - Optional admin-managed XLSX/CSV matricule registry, case-insensitive duplicate prevention, and department selection during registration.
 - D1-backed, expiring, single-use staff codes entered through the login identifier field, followed by a dedicated staff registration workflow.
-- Administrator control plane for accounts, staff permissions, access codes, matricule verification, document requests, reports, analysis jobs, and audit records.
+- Administrator control plane for account suspension/deletion, forum and announcement permissions, staff access codes, matricule verification, elections, document requests, reports, analysis jobs, and audit records.
 - Private lecture-note publication, a searchable student library, authenticated downloads, replacement, unpublishing, and deletion.
-- Groq-assisted MCQ draft generation, staff publication, timed student execution, and server-side scoring.
-- Announcements, persistent notifications, configurable Mark/Bio-Data/Other complaints, voting, and department-scoped forums that administrators can suspend per channel.
-- Student forum usernames with administrator-only real identity disclosure, private R2 pictures and voice notes, and optional per-recipient view-once delivery.
+- Groq-assisted MCQ draft generation, lecturer-selected timers, resumable server-enforced attempts, participation records, CSV export, and server-side scoring.
+- Permission-controlled announcements, persistent notifications, configurable Mark/Bio-Data/Other complaints, admin-managed elections with optional live results, and department-scoped forums that administrators can suspend per channel.
+- Student forum usernames, D1-backed compact/standard message sizing, timestamps, long-press actions, private R2 pictures and voice notes, and optional per-recipient view-once delivery.
 - Student-created Lost & Found posts with pictures, owner-controlled found status, and automatic deletion one hour after resolution.
 - Installable PWA metadata, offline app-shell support, Chromium install prompts, and iPhone/iPad home-screen guidance.
 - Student document requests with admin comments and private PDF delivery through authenticated R2 downloads.
