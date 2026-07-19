@@ -122,4 +122,8 @@
   .answer-option.is-selected {
     @apply border-teal-700 bg-teal-50 text-navy;
   }
+
+  .forum-layout {
+    @apply grid grid-rows-[auto_minmax(0,1fr)] lg:grid-cols-[250px_minmax(0,1fr)] lg:grid-rows-1;
+  }
 }
