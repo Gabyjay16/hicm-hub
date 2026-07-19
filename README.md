@@ -6,13 +6,13 @@ No credentials, votes, application records, or session authority are stored in L
 
 ## Current modules
 
-- Role-aware student and staff portal dashboards.
-- Student registration and name-plus-matricule login.
-- D1-backed, expiring, single-use staff codes with salted, server-peppered password authentication.
+- Announcement-only signed-out screen with admin-published image and video media; every portal feature requires authentication.
+- Role-aware student and staff portal dashboards with student registration and name-plus-matricule login.
+- D1-backed, expiring, single-use staff codes entered in the Matricule field, followed by a dedicated staff registration workflow with salted, server-peppered password authentication.
 - Administrator control plane for accounts, staff permissions, access codes, reports, analysis jobs, and audit records.
-- Private lecture-note publication and authenticated student downloads.
+- Private lecture-note publication, a searchable student library, authenticated downloads, replacement, unpublishing, and deletion.
 - Groq-assisted MCQ draft generation, staff publication, timed student execution, and server-side scoring.
-- Announcements, persistent notifications, confidential complaints, voting, Lost & Found, and categorized forums with replies and reports.
+- Announcements, persistent notifications, configurable Mark/Bio-Data/Other complaints, voting, Lost & Found, and a General Forum that administrators can suspend or reopen.
 - Paid thesis workflow with private R2 files, queued PDF/DOCX extraction, deterministic internal-corpus matching, progress, retries, and source evidence.
 - D1-backed records, R2-backed uploads, HttpOnly cookies, audit events, and server-side authorization checks.
 
@@ -22,8 +22,7 @@ Student name-plus-matricule login follows the requested initial workflow but is 
 
 ```bash
 npm install
-npm run build
-npm run test
+npm run check
 npm run test:e2e
 npx wrangler d1 migrations apply hicm-hub-db --local
 npx wrangler pages dev dist
