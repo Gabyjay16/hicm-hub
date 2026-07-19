@@ -24,14 +24,25 @@ test("protected feature URLs return signed-out users to the login screen", async
   await expect(page.getByRole("heading", { name: "School Announcements" })).toBeVisible();
 });
 
-test("staff code pasted in student login opens dedicated registration", async ({ page }) => {
+test("login is the default auth flow and registration is student-only", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Login or register" }).click();
-  await expect(page.getByRole("heading", { name: "Student access" })).toBeVisible();
-  await expect(page.getByPlaceholder("e.g. Uba23C001 or staff code")).toBeVisible();
-  await expect(page.getByPlaceholder("e.g. 6XX XXX XXX")).toBeVisible();
-  await page.getByLabel("Full Name").fill("New Lecturer");
-  await page.getByLabel("Matricule").fill("STF-ABCD-2345");
+  await page.getByRole("button", { name: "Login" }).first().click();
+  await expect(page.getByRole("heading", { name: "Login" })).toBeVisible();
+  await expect(page.getByLabel("Matricule / Staff Name")).toHaveAttribute("placeholder", "e.g. Uba23C001");
+  await expect(page.getByLabel("Password")).toBeVisible();
+  await expect(page.getByLabel("Remember me on this device")).toBeVisible();
+  await page.getByRole("link", { name: "Register" }).click();
+  await expect(page.getByRole("heading", { name: "Student Registration" })).toBeVisible();
+  await expect(page.getByLabel("Department")).toContainText("Accounting and Finance");
+  await expect(page.getByText("staff code", { exact: false })).toHaveCount(0);
+});
+
+test("a valid hidden staff code entered at login opens dedicated registration", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Login" }).first().click();
+  await page.getByLabel("Matricule / Staff Name").fill("STF-ABCD-2345");
+  await page.getByLabel("Password").fill("TemporaryPass1");
+  await page.getByRole("button", { name: "Login" }).last().click();
   await expect(page).toHaveURL("/staff-register?code=STF-ABCD-2345");
   await expect(page.getByRole("heading", { name: "Staff Registration" })).toBeVisible();
   await expect(page.getByLabel("Position")).toBeVisible();
