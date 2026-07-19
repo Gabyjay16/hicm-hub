@@ -1,4 +1,4 @@
-import { Bell, BriefcaseBusiness, ChevronDown, GraduationCap, Home, LogIn, MessageSquare, ShieldCheck, UserRound } from "lucide-react";
+import { Bell, BriefcaseBusiness, ChevronDown, GraduationCap, Home, LogIn, MessageSquare, Settings, ShieldCheck, UserRound } from "lucide-react";
 import { useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useApp } from "../context/AppContext";
@@ -11,7 +11,7 @@ const groups = [
 
 export default function Navbar() {
   const [profileOpen, setProfileOpen] = useState(false);
-  const { session, user, viewRole, setAuthOpen, logout, toggleRole } = useApp();
+  const { session, user, viewRole, setAuthOpen, logout, toggleRole, unreadCount } = useApp();
   const location = useLocation();
   const staff = viewRole === "staff";
 
@@ -31,9 +31,9 @@ export default function Navbar() {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-4">
-          <Link to="/announcements" className="relative grid h-10 w-10 place-items-center text-navy" aria-label="Notifications">
+          <Link to="/alerts" className="relative grid h-10 w-10 place-items-center text-navy" aria-label={`${unreadCount} unread notifications`}>
             <Bell size={23} />
-            <span className="absolute right-0 top-0 grid h-5 min-w-5 place-items-center rounded-full bg-teal-700 px-1 text-[11px] font-bold text-white">1</span>
+            {unreadCount > 0 && <span className="absolute right-0 top-0 grid h-5 min-w-5 place-items-center rounded-full bg-teal-700 px-1 text-[11px] font-bold text-white">{unreadCount > 99 ? "99+" : unreadCount}</span>}
           </Link>
           {session ? (
             <div className="relative">
@@ -42,7 +42,8 @@ export default function Navbar() {
               </button>
               {profileOpen && (
                 <div className="absolute right-0 top-full z-50 w-56 rounded-md border border-slate-200 bg-white p-2 shadow-soft">
-                  {user.role === "staff" && <button onClick={() => { toggleRole(); setProfileOpen(false); }} className="nav-menu-action"><ShieldCheck size={17} /> Switch portal view</button>}
+                  {(user.role === "staff" || user.role === "admin") && <button onClick={() => { toggleRole(); setProfileOpen(false); }} className="nav-menu-action"><ShieldCheck size={17} /> Switch portal view</button>}
+                  {user.role === "admin" && <Link to="/admin" onClick={() => setProfileOpen(false)} className="nav-menu-action"><Settings size={17} /> Administration</Link>}
                   <button onClick={() => { logout(); setProfileOpen(false); }} className="nav-menu-action"><LogIn size={17} /> Sign out</button>
                 </div>
               )}
@@ -56,7 +57,7 @@ export default function Navbar() {
     <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
       <MobileLink to="/" label="Home" icon={Home} active={location.pathname === "/"} />
       <MobileLink to={staff ? "/quiz" : "/forums"} label={staff ? "Academic Tools" : "Forum"} icon={staff ? BriefcaseBusiness : MessageSquare} active={location.pathname === (staff ? "/quiz" : "/forums")} />
-      <MobileLink to="/announcements" label="Alerts" icon={Bell} active={location.pathname === "/announcements"} />
+      <MobileLink to="/alerts" label="Alerts" icon={Bell} active={location.pathname === "/alerts"} />
       <button aria-label={session ? "Open profile menu" : "Login"} onClick={() => session ? setProfileOpen((open) => !open) : setAuthOpen(true)} className="mobile-nav-item"><UserRound size={23} /><span>Profile</span></button>
     </nav>
     </>
