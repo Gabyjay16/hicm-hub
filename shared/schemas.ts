@@ -5,8 +5,19 @@ export const nameSchema = z.string().trim().min(2).max(120);
 export const phoneSchema = z.string().trim().regex(/^\+?[0-9 ()-]{7,20}$/, "Enter a valid phone number.");
 export const courseCodeSchema = z.string().trim().min(2).max(24).transform((value) => value.toUpperCase());
 
+export const departments = [
+  "Accounting and Finance",
+  "Money and Banking",
+  "Management",
+  "ORGS",
+  "Marketing",
+  "Insurance and Security",
+] as const;
+
 export const authSchema = z.object({
-  name: nameSchema,
+  mode: z.enum(["login", "student-register", "staff-register"]).optional().default("login"),
+  identifier: z.string().trim().min(1).max(160).optional(),
+  name: nameSchema.optional(),
   credential: z.string().min(1).max(160).optional(),
   matricule: z.string().trim().min(2).max(40).optional(),
   password: z.string().min(8).max(160).optional(),
@@ -15,6 +26,8 @@ export const authSchema = z.object({
   accessCode: z.string().trim().max(40).optional(),
   confirmPassword: z.string().max(160).optional(),
   role: z.enum(["student", "staff"]).optional(),
+  department: z.enum(departments).optional(),
+  remember: z.boolean().optional().default(false),
 });
 
 export const announcementSchema = z.object({
@@ -73,7 +86,7 @@ export const lostFoundSchema = z.object({
 
 export const forumTextSchema = z.string().trim().min(1).max(1000).refine(
   (value) => !/(?:https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|org|net|edu|io|co|cm)\b|<a\s|&#x?[0-9a-f]+;)/i.test(value),
-  "Links are not allowed in the General Forum.",
+  "Links are not allowed in forum channels.",
 );
 
 export function parseBody<T>(schema: z.ZodType<T>, input: unknown): T {
