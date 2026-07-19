@@ -6,8 +6,7 @@ import { api, postJson } from "../utils/api";
 export const forumLinkPattern = /(?:https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|org|net|edu|io|co|cm)\b|<a\s)/i;
 
 export default function Forums() {
-  const { requireAuth, setToast, user } = useApp();
-  const availableChannels = ["General"];
+  const { channels: availableChannels, requireAuth, setToast, user } = useApp();
   const [channel, setChannel] = useState("General");
   const [messages, setMessages] = useState([]);
   const [settings, setSettings] = useState({ links_enabled: 0 });
@@ -18,6 +17,7 @@ export default function Forums() {
   const endRef = useRef(null);
 
   async function load(reset = false) {
+    if (!channel || !availableChannels.includes(channel)) { setLoading(false); return; }
     const last = !reset && messages[messages.length - 1]?.created_at;
     const data = await api(`/forums/${encodeURIComponent(channel)}/messages${last ? `?after=${encodeURIComponent(last)}` : ""}`);
     setSettings(data.settings || {});
@@ -25,6 +25,10 @@ export default function Forums() {
     setError("");
     setLoading(false);
   }
+
+  useEffect(() => {
+    if (availableChannels.length && !availableChannels.includes(channel)) setChannel(availableChannels[0]);
+  }, [availableChannels.join("|")]);
 
   useEffect(() => {
     setMessages([]); setLoading(true); setError(""); setReplyTo(null);
@@ -60,7 +64,7 @@ export default function Forums() {
       <div className="portal-frame forum-layout min-h-[calc(100vh-132px)] max-w-6xl sm:min-h-[680px]">
         <aside className="border-b border-slate-200 bg-slate-50 lg:border-b-0 lg:border-r">
           <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-5"><span className="portal-icon-ring h-10 w-10"><MessageSquareText size={20} /></span><div><h1 className="font-extrabold text-navy">Forums</h1><p className="text-xs text-slate-500">HICM channels</p></div></div>
-          <nav className="flex gap-2 overflow-x-auto p-3 lg:grid" aria-label="Forum channels">{availableChannels.map((item) => <button key={item} onClick={() => setChannel(item)} className={`flex min-w-fit items-center gap-2 rounded-md px-3 py-3 text-left text-sm font-bold ${channel === item ? "bg-teal-700 text-white" : "text-slate-600 hover:bg-white"}`}><Hash size={16} />{item}</button>)}</nav>
+          <nav className="flex gap-2 overflow-x-auto p-3 lg:grid" aria-label="Forum channels">{availableChannels.map((item) => <button key={item} onClick={() => setChannel(item)} className={`flex min-w-fit items-center gap-2 rounded-md px-3 py-3 text-left text-sm font-bold ${channel === item ? "bg-teal-700 text-white" : "text-slate-600 hover:bg-white"}`}><Hash size={16} />{item}</button>)}{!availableChannels.length && <p className="p-3 text-sm text-slate-500">Forum access has not been enabled for this account.</p>}</nav>
         </aside>
         <section className="flex min-h-0 flex-col">
           <header className="border-b border-slate-200 px-5 py-4"><h2 className="font-extrabold text-navy">#{channel}</h2><p className="text-xs text-slate-500">Replies notify the original author</p></header>
@@ -74,7 +78,7 @@ export default function Forums() {
             <div ref={endRef} />
           </div>
           {replyTo && <div className="flex items-center gap-3 border-t border-slate-200 bg-teal-50 px-4 py-2 text-xs text-teal-950"><Reply size={14} /><span className="min-w-0 flex-1 truncate">Replying to <b>{replyTo.author}</b>: {replyTo.body}</span><button onClick={() => setReplyTo(null)} aria-label="Cancel reply"><X size={16} /></button></div>}
-          {settings.suspended ? <div role="status" className="border-t border-amber-200 bg-amber-50 p-4 text-center text-sm font-bold text-amber-950">{settings.suspension_message || "The General Forum is temporarily suspended by administration."}</div> : <form onSubmit={submit} className="flex gap-2 border-t border-slate-200 bg-white p-4"><label className="min-w-0 flex-1"><span className="sr-only">Message {channel}</span><input className="field py-3" value={body} maxLength={1000} onChange={(event) => setBody(event.target.value)} placeholder={replyTo ? `Reply to ${replyTo.author}` : "Write a message"} /></label><button className="btn-primary h-11 w-11 px-0" aria-label="Send message"><Send size={18} /></button></form>}
+          {settings.suspended ? <div role="status" className="border-t border-amber-200 bg-amber-50 p-4 text-center text-sm font-bold text-amber-950">{settings.suspension_message || `#${channel} is temporarily suspended by administration.`}</div> : availableChannels.length > 0 && <form onSubmit={submit} className="flex gap-2 border-t border-slate-200 bg-white p-4"><label className="min-w-0 flex-1"><span className="sr-only">Message {channel}</span><input className="field py-3" value={body} maxLength={1000} onChange={(event) => setBody(event.target.value)} placeholder={replyTo ? `Reply to ${replyTo.author}` : "Write a message"} /></label><button className="btn-primary h-11 w-11 px-0" aria-label="Send message"><Send size={18} /></button></form>}
         </section>
       </div>
     </main>
