@@ -1,6 +1,7 @@
 import { processAnalysisJob } from "../lib/analysis-job.js";
+import { announcementSchema, authSchema, complaintSchema, evaluationSchema, forumTextSchema, lostFoundSchema, parseBody } from "../../shared/schemas.ts";
 
-const CHANNELS = ["General", "Level-200 (Year 1)", "Level-300 (Year 2)", "Level-400 (Year 3)"];
+const CHANNELS = ["General"];
 
 const CANDIDATES = [
   { id: "ngalle", name: "Ngalle Prisca", post: "Student Union President", vision: "Transparent grants, safer transport, and faster academic support." },
@@ -44,18 +45,21 @@ const sampleQuestions = [
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
-  const route = url.pathname.replace(/^\/api\/?/, "");
+  const route = url.pathname.replace(/^\/api\/?/, "").replace(/^v1\//, "");
 
   if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders() });
+    return new Response(null, { headers: { ...securityHeaders(), ...corsHeaders() } });
   }
 
   try {
     if (!env.DB) return json({ error: "Cloudflare D1 binding DB is not configured." }, 500);
+    enforceRequestBoundary(request, url);
     await ensureSchema(env.DB);
     await seedData(env.DB);
+    if (isMutation(request) && !["auth", "auth/resolve", "admin/bootstrap"].includes(route)) await verifyMutation(request, env);
 
     if (route === "session" && request.method === "GET") return await getSessionResponse(request, env);
+    if (route === "auth/resolve" && request.method === "POST") return await resolveAuthMode(request, env);
     if (route === "auth" && request.method === "POST") return await authenticate(request, env);
     if (route === "logout" && request.method === "POST") return await logout(request, env);
     if (route === "session/role" && request.method === "PATCH") return await updateViewRole(request, env);
@@ -68,21 +72,39 @@ export async function onRequest(context) {
     if (/^admin\/staff-codes\/[^/]+$/.test(route) && request.method === "PATCH") return await revokeStaffCode(route, request, env);
     if (/^admin\/users\/[^/]+$/.test(route) && request.method === "PATCH") return await updateUserAdmin(route, request, env);
     if (route === "admin/forum/settings" && request.method === "PATCH") return await updateForumSettings(request, env);
+    if (route === "admin/forum/settings" && request.method === "GET") return await getForumSettings(request, env);
     if (route === "admin/forum/reports" && request.method === "GET") return await listForumReports(request, env);
     if (/^admin\/forum\/reports\/[^/]+$/.test(route) && request.method === "PATCH") return await reviewForumReport(route, request, env);
     if (route === "admin/audit" && request.method === "GET") return await listAuditLogs(request, env);
     if (route === "admin/analysis" && request.method === "GET") return await listAnalysisAdmin(request, env);
+    if (route === "admin/analysis/settings" && request.method === "GET") return await getAnalysisSettings(request, env);
+    if (route === "admin/analysis/settings" && request.method === "PATCH") return await updateAnalysisSettings(request, env);
+    if (/^admin\/analysis\/[^/]+\/note$/.test(route) && request.method === "POST") return await addAnalysisAdminNote(route, request, env);
+    if (/^admin\/analysis\/[^/]+\/restore-entitlement$/.test(route) && request.method === "POST") return await restoreAnalysisEntitlement(route, request, env);
+    if (route === "admin/elections" && request.method === "POST") return await createElection(request, env);
+    if (/^admin\/elections\/[^/]+$/.test(route) && request.method === "PATCH") return await updateElection(route, request, env);
+    if (route === "admin/forum/moderation" && request.method === "GET") return await listForumModeration(request, env);
+    if (/^admin\/forum\/messages\/[^/]+$/.test(route) && request.method === "PATCH") return await moderateForumMessage(route, request, env);
+    if (/^admin\/forum\/users\/[^/]+$/.test(route) && request.method === "PATCH") return await restrictForumUser(route, request, env);
 
     if (route === "notifications" && request.method === "GET") return await listNotifications(request, env);
     if (route === "notifications/read-all" && request.method === "POST") return await readAllNotifications(request, env);
     if (/^notifications\/[^/]+$/.test(route) && request.method === "PATCH") return await readNotification(route, request, env);
 
-    if (route === "announcements" && request.method === "GET") return await listAnnouncements(env);
+    if (route === "announcements" && request.method === "GET") return await listAnnouncements(request, env);
+    if (/^public\/announcements\/[^/]+\/media$/.test(route) && request.method === "GET") return await readAnnouncementMedia(route, env);
     if (route === "announcements" && request.method === "POST") return await createAnnouncement(request, env);
+    if (/^announcements\/[^/]+$/.test(route) && request.method === "PATCH") return await updateAnnouncement(route, request, env);
+    if (/^announcements\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteAnnouncement(route, request, env);
+    if (/^announcements\/[^/]+\/read$/.test(route) && request.method === "POST") return await markAnnouncementRead(route, request, env);
 
     if (route === "complaints" && request.method === "GET") return await listComplaints(request, env);
+    if (route === "complaint-fields" && request.method === "GET") return await listComplaintFields(request, env);
+    if (route === "admin/complaint-fields" && request.method === "POST") return await createComplaintField(request, env);
+    if (/^admin\/complaint-fields\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteComplaintField(route, request, env);
     if (route === "complaints" && request.method === "POST") return await createComplaint(request, env);
     if (route.startsWith("complaints/") && request.method === "PATCH") return await updateComplaint(route, request, env);
+    if (/^complaints\/[^/]+$/.test(route) && request.method === "GET") return await getComplaint(route, request, env);
 
     if (route === "quizzes" && request.method === "GET") return await listQuizzes(request, env);
     if (route === "ai/ping" && request.method === "GET") return await pingGroq(request, env);
@@ -90,24 +112,44 @@ export async function onRequest(context) {
     if (route === "quizzes/generate" && request.method === "POST") return await generateQuiz(request, env);
     if (/^quizzes\/[^/]+$/.test(route) && request.method === "PATCH") return await updateQuiz(route, request, env);
     if (route.startsWith("quizzes/") && route.endsWith("/submit") && request.method === "POST") return await submitQuiz(route, request, env);
+    if (route === "evaluations" && request.method === "POST") return await createEvaluation(request, env);
+    if (/^evaluations\/[^/]+$/.test(route) && request.method === "GET") return await getEvaluation(route, request, env);
+    if (/^evaluations\/[^/]+$/.test(route) && request.method === "PATCH") return await updateEvaluationLifecycle(route, request, env);
+    if (/^evaluations\/[^/]+\/duplicate$/.test(route) && request.method === "POST") return await duplicateEvaluation(route, request, env);
+    if (/^evaluations\/[^/]+\/start$/.test(route) && request.method === "POST") return await startEvaluation(route, request, env);
+    if (/^evaluations\/[^/]+\/results$/.test(route) && request.method === "GET") return await evaluationResults(route, request, env, false);
+    if (/^evaluations\/[^/]+\/export$/.test(route) && request.method === "GET") return await evaluationResults(route, request, env, true);
+    if (/^evaluation-attempts\/[^/]+$/.test(route) && request.method === "GET") return await getEvaluationAttempt(route, request, env);
+    if (/^evaluation-attempts\/[^/]+\/answers$/.test(route) && request.method === "PATCH") return await saveEvaluationAnswer(route, request, env);
+    if (/^evaluation-attempts\/[^/]+\/submit$/.test(route) && request.method === "POST") return await submitEvaluationAttempt(route, request, env);
 
     if (route === "notes" && request.method === "GET") return await listNotes(request, env);
     if (route === "notes" && request.method === "POST") return await publishNote(request, env);
+    if (/^notes\/[^/]+$/.test(route) && request.method === "PATCH") return await updateNote(route, request, env);
+    if (/^notes\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteNote(route, request, env);
+    if (/^notes\/[^/]+\/replace$/.test(route) && request.method === "POST") return await replaceNote(route, request, env);
 
     if (route === "votes" && request.method === "GET") return await listVotes(request, env);
     if (route === "votes" && request.method === "POST") return await castVote(request, env);
+    if (route === "elections" && request.method === "GET") return await listElections(request, env);
+    if (/^elections\/[^/]+\/vote$/.test(route) && request.method === "POST") return await castElectionVote(route, request, env);
 
-    if (route === "lost-found" && request.method === "GET") return await listLostFound(env);
+    if (route === "lost-found" && request.method === "GET") return await listLostFound(request, env);
+    if (route === "lost-found" && request.method === "POST") return await createLostFound(request, env);
+    if (/^lost-found\/[^/]+$/.test(route) && request.method === "PATCH") return await updateLostFound(route, request, env);
+    if (/^lost-found\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteLostFound(route, request, env);
 
     if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "GET") return await listMessages(route, request, env);
     if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "POST") return await createMessage(route, request, env);
     if (/^forums\/messages\/[^/]+\/report$/.test(route) && request.method === "POST") return await reportMessage(route, request, env);
+    if (/^forums\/messages\/[^/]+\/media$/.test(route) && request.method === "GET") return await readForumMedia(route, request, env);
 
     if (route === "thesis" && request.method === "GET") return await getThesis(request, env);
     if (route === "thesis/payment" && request.method === "POST") return await submitPayment(request, env);
     if (route === "thesis/upload" && request.method === "POST") return await uploadThesis(request, env, context);
     if (/^thesis\/jobs\/[^/]+$/.test(route) && request.method === "GET") return await getAnalysisJob(route, request, env);
     if (/^thesis\/jobs\/[^/]+\/retry$/.test(route) && request.method === "POST") return await retryAnalysisJob(route, request, env, context);
+    if (/^thesis\/jobs\/[^/]+\/report$/.test(route) && request.method === "GET") return await downloadAnalysisReport(route, request, env);
     if (route.startsWith("thesis/") && request.method === "PATCH") return await reviewPayment(route, request, env);
 
     if (route.startsWith("files/") && request.method === "GET") return await readFile(route, request, env);
@@ -130,12 +172,32 @@ function securityHeaders() {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Permissions-Policy": "camera=(), geolocation=(), microphone=()",
+    "Permissions-Policy": "camera=(self), geolocation=(), microphone=(self)",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
   };
 }
 
 function corsHeaders() {
-  return { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS" };
+  return { "Access-Control-Allow-Headers": "Content-Type, X-CSRF-Token, Idempotency-Key", "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS" };
+}
+
+function isMutation(request) {
+  return ["POST", "PATCH", "PUT", "DELETE"].includes(request.method);
+}
+
+function enforceRequestBoundary(request, url) {
+  const contentLength = Number(request.headers.get("Content-Length") || 0);
+  if (contentLength > 30 * 1024 * 1024) throw Object.assign(new Error("Request is too large."), { status: 413 });
+  const origin = request.headers.get("Origin");
+  const fetchSite = request.headers.get("Sec-Fetch-Site");
+  if ((origin && origin !== url.origin) || fetchSite === "cross-site") throw Object.assign(new Error("Cross-site requests are not allowed."), { status: 403 });
+}
+
+async function verifyMutation(request, env) {
+  const session = await currentSession(request, env);
+  if (!session) throw Object.assign(new Error("Your session has expired. Please sign in again."), { status: 401, code: "SESSION_EXPIRED" });
+  const supplied = request.headers.get("X-CSRF-Token") || "";
+  if (!session.csrf_token || !safeEqual(supplied, session.csrf_token)) throw Object.assign(new Error("This request could not be verified. Refresh and try again."), { status: 403, code: "CSRF_INVALID" });
 }
 
 function now() {
@@ -172,7 +234,7 @@ async function ensureSchema(db) {
 async function seedData(db) {
   const announcementCount = await count(db, "announcements");
   if (!announcementCount) {
-    await db.prepare("INSERT INTO announcements VALUES (?, ?, ?, ?, ?)").bind(id("ann"), "Welcome to HICM HUB", "All official notices, voting, academic tools, complaints, and campus conversations now live in one secure portal.", "Academic Affairs", now()).run();
+    await db.prepare("INSERT INTO announcements (id, title, body, author, created_at) VALUES (?, ?, ?, ?, ?)").bind(id("ann"), "Welcome to HICM HUB", "All official notices, voting, academic tools, complaints, and campus conversations now live in one secure portal.", "Academic Affairs", now()).run();
   }
 
   const quizCount = await count(db, "quizzes");
@@ -189,7 +251,7 @@ async function seedData(db) {
       ["FOUND", "Brown Notebook", "Cafeteria", "690 334 118"],
     ];
     for (const item of items) {
-      await db.prepare("INSERT INTO lost_items VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id("item"), item[0], item[1], item[2], item[3], null, now()).run();
+      await db.prepare("INSERT INTO lost_items (id, type, title, location, contact, image_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id("item"), item[0], item[1], item[2], item[3], null, now()).run();
     }
   }
 
@@ -210,15 +272,24 @@ async function currentSession(request, env) {
   const token = cookieToken(request);
   if (!token) return null;
   const session = await env.DB.prepare(`
-    SELECT sessions.token, sessions.view_role, users.*,
+    SELECT sessions.token, sessions.view_role, sessions.csrf_token, sessions.expires_at, users.*,
       COALESCE(staff_permissions.is_admin, 0) AS is_admin,
       COALESCE(staff_permissions.forum_access, 0) AS forum_access,
       COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
     FROM sessions
     JOIN users ON sessions.user_id = users.id
     LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
-    WHERE sessions.token = ?
+    WHERE sessions.token = ? AND datetime(sessions.expires_at) > CURRENT_TIMESTAMP AND users.account_status = 'active'
   `).bind(token).first();
+  if (!session) {
+    await env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+    return null;
+  }
+  if (!session.csrf_token) {
+    session.csrf_token = crypto.randomUUID();
+    await env.DB.prepare("UPDATE sessions SET csrf_token = ? WHERE token = ?").bind(session.csrf_token, token).run();
+  }
+  await env.DB.prepare("UPDATE sessions SET last_seen_at = ? WHERE token = ?").bind(now(), token).run();
   if (session?.is_admin) session.role = "admin";
   return session;
 }
@@ -248,7 +319,8 @@ async function getSessionResponse(request, env) {
 
 function presentSession(session) {
   return {
-    token: session.token,
+    csrfToken: session.csrf_token,
+    expiresAt: session.expires_at,
     viewRole: session.view_role,
     user: {
       id: session.id,
@@ -264,14 +336,18 @@ function presentSession(session) {
 }
 
 async function authenticate(request, env) {
-  const body = await request.json();
-  const role = body.role === "staff" ? "staff" : "student";
+  const body = parseBody(authSchema, await request.json());
+  await enforceRateLimit(env, request, "authenticate", 8, 15 * 60);
+  const normalizedName = String(body.name).trim().toLowerCase();
+  const existingStaff = await env.DB.prepare("SELECT id FROM users WHERE role = 'staff' AND normalized_name = ?").bind(normalizedName).first();
+  const enteredCredential = String(body.credential || "");
+  const role = existingStaff || body.role === "staff" || /^STF-/i.test(enteredCredential || String(body.accessCode || "")) ? "staff" : "student";
   const name = String(body.name || "").trim();
   if (!name) return json({ error: "Enter your full name and credential." }, 400);
   let user;
 
   if (role === "student") {
-    const matricule = String(body.matricule || "").trim().toUpperCase();
+    const matricule = String(body.matricule || enteredCredential).trim().toUpperCase();
     if (!matricule) return json({ error: "Enter your full name and credential." }, 400);
     user = await env.DB.prepare("SELECT * FROM users WHERE UPPER(matricule) = ? AND role = 'student'").bind(matricule).first();
     if (user && user.name.trim().toLowerCase() !== name.toLowerCase()) return json({ error: "The supplied login details are not valid." }, 401);
@@ -282,7 +358,7 @@ async function authenticate(request, env) {
       await env.DB.prepare("INSERT INTO users (id, role, name, position, matricule, phone, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(user.id, user.role, user.name, user.position, user.matricule, user.phone, user.created_at).run();
     }
   } else {
-    const password = String(body.password || "");
+    const password = String(body.password || enteredCredential || "");
     user = await env.DB.prepare(`
       SELECT users.*, COALESCE(staff_permissions.is_admin, 0) AS is_admin,
         COALESCE(staff_permissions.forum_access, 0) AS forum_access,
@@ -293,20 +369,21 @@ async function authenticate(request, env) {
     if (user) {
       if (!user.password_hash || !env.PASSWORD_PEPPER || !await verifyPassword(password, user.password_salt, user.password_hash, env.PASSWORD_PEPPER)) return json({ error: "The supplied login details are not valid." }, 401);
     } else {
-      const accessCode = String(body.accessCode || "").trim().toUpperCase();
+      const accessCode = String(body.accessCode || enteredCredential || "").trim().toUpperCase();
       const code = await env.DB.prepare("SELECT id FROM staff_access_codes WHERE code = ? AND revoked_at IS NULL AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP").bind(accessCode).first();
       if (!code) return json({ error: "This staff access code is invalid, expired, or already used." }, 403);
       if (!body.position || password.length < 8) return json({ error: "Staff registration requires a position and password of at least 8 characters." }, 400);
       if (!env.PASSWORD_PEPPER) return json({ error: "Staff authentication is not configured." }, 503);
       const credentials = await hashPassword(password, env.PASSWORD_PEPPER);
+      if (password !== body.confirmPassword) return json({ error: "The passwords do not match." }, 400);
       user = { id: id("usr"), role, name, position: String(body.position).trim(), matricule: null, phone: String(body.phone || "").trim(), created_at: now() };
       try {
         await env.DB.batch([
           env.DB.prepare(`
-            INSERT INTO users (id, role, name, position, matricule, phone, created_at, password_hash, password_salt, staff_code_id)
-            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, id FROM staff_access_codes
+            INSERT INTO users (id, role, name, normalized_name, position, matricule, phone, created_at, password_hash, password_salt, staff_code_id)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, id FROM staff_access_codes
             WHERE id = ? AND revoked_at IS NULL AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
-          `).bind(user.id, user.role, user.name, user.position, user.matricule, user.phone, user.created_at, credentials.hash, credentials.salt, code.id),
+          `).bind(user.id, user.role, user.name, normalizedName, user.position, user.matricule, user.phone, user.created_at, credentials.hash, credentials.salt, code.id),
           env.DB.prepare("UPDATE staff_access_codes SET used_by = ?, used_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP")
             .bind(user.id, now(), code.id),
           env.DB.prepare("INSERT INTO staff_permissions (user_id, updated_at) VALUES (?, ?)").bind(user.id, now()),
@@ -323,10 +400,42 @@ async function authenticate(request, env) {
   if (user.account_status === "blocked") return json({ error: "The supplied login details are not valid." }, 401);
 
   const token = crypto.randomUUID();
-  await env.DB.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?)").bind(token, user.id, role, now()).run();
-  const session = { token, view_role: role, ...user };
+  const csrfToken = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO sessions (token, user_id, view_role, created_at, csrf_token, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(token, user.id, role, now(), csrfToken, expiresAt, now()),
+    env.DB.prepare("UPDATE users SET last_login_at = ?, normalized_name = COALESCE(normalized_name, ?) WHERE id = ?").bind(now(), normalizedName, user.id),
+  ]);
+  const session = { token, csrf_token: csrfToken, expires_at: expiresAt, view_role: role, ...user };
   if (user.is_admin) session.role = "admin";
-  return json({ session: presentSession(session) }, 200, { "Set-Cookie": `hicm_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=2592000` });
+  return json({ session: presentSession(session) }, 200, { "Set-Cookie": `hicm_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=43200` });
+}
+
+async function resolveAuthMode(request, env) {
+  await enforceRateLimit(env, request, "auth_resolve", 20, 15 * 60);
+  const body = await request.json();
+  const name = String(body.name || "").trim().toLowerCase();
+  const credential = String(body.credential || "").trim().toUpperCase();
+  const staff = name ? await env.DB.prepare("SELECT id FROM users WHERE role = 'staff' AND normalized_name = ? AND account_status = 'active'").bind(name).first() : null;
+  const code = /^STF-/.test(credential) ? await env.DB.prepare("SELECT id FROM staff_access_codes WHERE code = ? AND revoked_at IS NULL AND used_at IS NULL AND datetime(expires_at) > CURRENT_TIMESTAMP").bind(credential).first() : null;
+  return json({ mode: code ? "staff-registration" : staff ? "staff-login" : "student" });
+}
+
+async function enforceRateLimit(env, request, action, limit, windowSeconds) {
+  const ip = request.headers.get("CF-Connecting-IP") || "local";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${action}:${ip}`));
+  const key = Array.from(new Uint8Array(digest)).slice(0, 12).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const row = await env.DB.prepare("SELECT * FROM request_rate_limits WHERE bucket_key = ?").bind(key).first();
+  const timestamp = Date.now();
+  const started = row ? Date.parse(row.window_started_at) : 0;
+  if (row?.blocked_until && Date.parse(row.blocked_until) > timestamp) throw Object.assign(new Error("Too many attempts. Please wait and try again."), { status: 429 });
+  const count = row && timestamp - started < windowSeconds * 1000 ? Number(row.request_count) + 1 : 1;
+  const windowStart = count === 1 ? now() : row.window_started_at;
+  const blockedUntil = count > limit ? new Date(timestamp + windowSeconds * 1000).toISOString() : null;
+  await env.DB.prepare(`INSERT INTO request_rate_limits (bucket_key, action, window_started_at, request_count, blocked_until, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(bucket_key) DO UPDATE SET window_started_at = excluded.window_started_at, request_count = excluded.request_count, blocked_until = excluded.blocked_until, updated_at = excluded.updated_at`)
+    .bind(key, action, windowStart, count, blockedUntil, now()).run();
+  if (blockedUntil) throw Object.assign(new Error("Too many attempts. Please wait and try again."), { status: 429 });
 }
 
 async function hashPassword(password, pepper) {
@@ -503,13 +612,20 @@ async function updateForumSettings(request, env) {
   const session = await requireAdmin(request, env);
   const body = await request.json();
   const channel = CHANNELS.includes(body.channel) ? body.channel : "General";
+  const current = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = ?").bind(channel).first();
   await env.DB.prepare(`
-    INSERT INTO forum_settings (channel, links_enabled, images_enabled, audio_enabled, updated_by, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(channel) DO UPDATE SET links_enabled = excluded.links_enabled, images_enabled = excluded.images_enabled, audio_enabled = excluded.audio_enabled, updated_by = excluded.updated_by, updated_at = excluded.updated_at
-  `).bind(channel, body.linksEnabled ? 1 : 0, body.imagesEnabled ? 1 : 0, body.audioEnabled ? 1 : 0, session.id, now()).run();
+    INSERT INTO forum_settings (channel, links_enabled, images_enabled, audio_enabled, image_max_bytes, audio_max_bytes, suspended, suspension_message, updated_by, updated_at)
+    VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(channel) DO UPDATE SET links_enabled = 0, images_enabled = excluded.images_enabled, audio_enabled = excluded.audio_enabled, image_max_bytes = excluded.image_max_bytes, audio_max_bytes = excluded.audio_max_bytes, suspended = excluded.suspended, suspension_message = excluded.suspension_message, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+  `).bind(channel, (body.imagesEnabled ?? Boolean(current?.images_enabled)) ? 1 : 0, (body.audioEnabled ?? Boolean(current?.audio_enabled)) ? 1 : 0, Math.max(1048576, Math.min(20971520, Number(body.imageMaxBytes || current?.image_max_bytes || 10485760))), Math.max(1048576, Math.min(52428800, Number(body.audioMaxBytes || current?.audio_max_bytes || 26214400))), (body.suspended ?? Boolean(current?.suspended)) ? 1 : 0, String(body.suspensionMessage || current?.suspension_message || "The General Forum is temporarily suspended by administration.").slice(0, 240), session.id, now()).run();
   await audit(env, session.id, "forum.settings_updated", "forum_channel", channel, body);
-  return json({ ok: true });
+  return getForumSettings(request, env);
+}
+
+async function getForumSettings(request, env) {
+  await requireAdmin(request, env);
+  const settings = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = 'General'").first();
+  return json({ settings });
 }
 
 async function listForumReports(request, env) {
@@ -589,26 +705,98 @@ function generateStaffCode() {
   return `STF-${value.slice(0, 4)}-${value.slice(4)}`;
 }
 
-async function listAnnouncements(env) {
-  const rows = await env.DB.prepare("SELECT * FROM announcements ORDER BY created_at DESC").all();
-  return json({ announcements: rows.results });
+async function listAnnouncements(request, env) {
+  const session = await currentSession(request, env);
+  const rows = session?.role === "admin"
+    ? await env.DB.prepare(`SELECT announcements.*, announcement_reads.read_at FROM announcements LEFT JOIN announcement_reads ON announcement_reads.announcement_id = announcements.id AND announcement_reads.user_id = ? ORDER BY COALESCE(publish_at, created_at) DESC`).bind(session.id).all()
+    : session
+      ? await env.DB.prepare(`SELECT announcements.*, announcement_reads.read_at FROM announcements LEFT JOIN announcement_reads ON announcement_reads.announcement_id = announcements.id AND announcement_reads.user_id = ?
+        WHERE announcements.status = 'published' AND datetime(COALESCE(announcements.publish_at, announcements.created_at)) <= CURRENT_TIMESTAMP ORDER BY COALESCE(announcements.publish_at, announcements.created_at) DESC`).bind(session.id).all()
+      : await env.DB.prepare(`SELECT announcements.*, NULL AS read_at FROM announcements WHERE status = 'published' AND datetime(COALESCE(publish_at, created_at)) <= CURRENT_TIMESTAMP ORDER BY COALESCE(publish_at, created_at) DESC LIMIT 20`).all();
+  return json({ announcements: rows.results.map((item) => ({ ...item, media_url: item.media_key ? `/api/public/announcements/${encodeURIComponent(item.id)}/media` : null })) });
 }
 
 async function createAnnouncement(request, env) {
+  const session = await requireAdmin(request, env);
+  const contentType = request.headers.get("Content-Type") || "";
+  const form = contentType.includes("multipart/form-data") ? await request.formData() : null;
+  const raw = form ? { title: form.get("title"), body: form.get("body"), status: form.get("status") || "published", publishAt: form.get("publishAt") || null } : await request.json();
+  const body = parseBody(announcementSchema, raw);
+  const media = form?.get("media");
+  const mediaError = media?.name ? await validateAnnouncementMedia(media) : null;
+  if (mediaError) return json({ error: mediaError }, 400);
+  const mediaKey = media?.name ? await storeUpload(env, media, "announcement-media") : null;
+  const announcementId = id("ann");
+  const status = body.status === "scheduled" && !body.publishAt ? "draft" : body.status;
+  try {
+    await env.DB.prepare(`INSERT INTO announcements (id, title, body, author, author_id, status, publish_at, created_at, updated_at, media_key, media_type, media_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(announcementId, body.title, body.body, session.name, session.id, status, body.publishAt || (status === "published" ? now() : null), now(), now(), mediaKey, media?.type || null, media?.name || null).run();
+  } catch (error) { if (mediaKey && env.UPLOADS) await env.UPLOADS.delete(mediaKey); throw error; }
+  if (status === "published") await notifyStudents(env, "announcement", body.title, body.body.slice(0, 240), `/announcements?announcement=${encodeURIComponent(announcementId)}`);
+  await audit(env, session.id, "announcement.created", "announcement", announcementId, { title: body.title, status });
+  return listAnnouncements(request, env);
+}
+
+async function updateAnnouncement(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const announcementId = route.split("/")[1];
+  const current = await env.DB.prepare("SELECT * FROM announcements WHERE id = ?").bind(announcementId).first();
+  if (!current) return json({ error: "Announcement not found." }, 404);
+  const body = parseBody(announcementSchema, await request.json());
+  const status = body.status;
+  const publishAt = body.publishAt || (status === "published" ? current.publish_at || now() : null);
+  await env.DB.prepare("UPDATE announcements SET title = ?, body = ?, status = ?, publish_at = ?, archived_at = CASE WHEN ? = 'archived' THEN ? ELSE NULL END, updated_at = ? WHERE id = ?")
+    .bind(body.title, body.body, status, publishAt, status, now(), now(), announcementId).run();
+  if (status === "published" && current.status !== "published") await notifyStudents(env, "announcement", body.title, body.body.slice(0, 240), `/announcements?announcement=${encodeURIComponent(announcementId)}`);
+  await audit(env, session.id, "announcement.updated", "announcement", announcementId, { status });
+  return listAnnouncements(request, env);
+}
+
+async function deleteAnnouncement(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const announcementId = route.split("/")[1];
+  const announcement = await env.DB.prepare("SELECT media_key FROM announcements WHERE id = ?").bind(announcementId).first();
+  await env.DB.prepare("DELETE FROM announcements WHERE id = ?").bind(announcementId).run();
+  if (announcement?.media_key && env.UPLOADS) await env.UPLOADS.delete(announcement.media_key);
+  await audit(env, session.id, "announcement.deleted", "announcement", announcementId);
+  return listAnnouncements(request, env);
+}
+
+async function readAnnouncementMedia(route, env) {
+  if (!env.UPLOADS) return json({ error: "File storage is unavailable." }, 503);
+  const announcementId = route.split("/")[2];
+  const announcement = await env.DB.prepare(`SELECT media_key, media_type, media_name FROM announcements
+    WHERE id = ? AND status = 'published' AND datetime(COALESCE(publish_at, created_at)) <= CURRENT_TIMESTAMP`).bind(announcementId).first();
+  if (!announcement?.media_key) return json({ error: "Announcement media not found." }, 404);
+  const object = await env.UPLOADS.get(announcement.media_key);
+  if (!object) return json({ error: "Announcement media not found." }, 404);
+  const headers = new Headers({ ...securityHeaders(), "Content-Type": announcement.media_type || "application/octet-stream", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" });
+  return new Response(object.body, { headers });
+}
+
+async function validateAnnouncementMedia(file) {
+  const type = String(file.type || "").toLowerCase();
+  if (type.startsWith("image/")) return validateImage(file, 10 * 1024 * 1024);
+  if (!type.startsWith("video/") || file.size > 50 * 1024 * 1024) return "Use a JPG, PNG, WebP, MP4, or WebM file (videos up to 50 MB).";
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  if (!["mp4", "webm"].includes(extension)) return "Announcement videos must be MP4 or WebM.";
+  const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  const signature = String.fromCharCode(...bytes);
+  const valid = extension === "mp4" ? signature.includes("ftyp") : bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+  return valid ? null : "The video contents do not match its extension.";
+}
+
+async function markAnnouncementRead(route, request, env) {
   const session = await requireSession(request, env);
-  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
-  const body = await request.json();
-  if (!body.title || !body.body) return json({ error: "Title and announcement body are required." }, 400);
-  await env.DB.prepare("INSERT INTO announcements VALUES (?, ?, ?, ?, ?)").bind(id("ann"), body.title, body.body, session.name, now()).run();
-  const students = await env.DB.prepare("SELECT id FROM users WHERE role = 'student' AND account_status = 'active'").all();
-  if (students.results.length) await env.DB.batch(students.results.map((student) => env.DB.prepare("INSERT INTO notifications (id, user_id, type, title, body, deep_link, created_at) VALUES (?, ?, 'announcement', ?, ?, '/announcements', ?)").bind(id("notification"), student.id, String(body.title).slice(0, 120), String(body.body).slice(0, 240), now())));
-  await audit(env, session.id, "announcement.created", "announcement", null, { title: body.title });
-  return listAnnouncements(env);
+  const announcementId = route.split("/")[1];
+  await env.DB.prepare(`INSERT INTO announcement_reads (announcement_id, user_id, read_at) VALUES (?, ?, ?)
+    ON CONFLICT(announcement_id, user_id) DO UPDATE SET read_at = excluded.read_at`).bind(announcementId, session.id, now()).run();
+  return json({ ok: true });
 }
 
 async function listComplaints(request, env) {
   const session = await requireSession(request, env);
-  const query = session.role === "staff" || session.role === "admin"
+  const query = session.role === "admin"
     ? env.DB.prepare("SELECT * FROM complaints ORDER BY created_at DESC")
     : env.DB.prepare("SELECT * FROM complaints WHERE user_id = ? ORDER BY created_at DESC").bind(session.id);
   const rows = await query.all();
@@ -617,27 +805,91 @@ async function listComplaints(request, env) {
 
 async function createComplaint(request, env) {
   const session = await requireSession(request, env);
+  if (session.role !== "student") return json({ error: "Only student accounts can submit complaints." }, 403);
   const form = await request.formData();
-  const category = form.get("category");
-  const description = form.get("description");
-  if (!category || !description) return json({ error: "Category and description are required." }, 400);
+  const parsed = parseBody(complaintSchema, { category: form.get("category"), description: form.get("description") });
+  const courseName = String(form.get("courseName") || "").trim();
+  const courseCode = String(form.get("courseCode") || "").trim().toUpperCase();
+  const academicYear = String(form.get("academicYear") || "").trim();
+  const semester = String(form.get("semester") || "").trim();
+  const contactPhone = String(form.get("phone") || session.phone || "").trim();
+  if (parsed.category === "Mark Complaint" && (!courseName || !courseCode || !academicYear || !semester || !contactPhone)) return json({ error: "Complete every mark complaint field." }, 400);
   const proof = form.get("proof");
-  const proofKey = proof && proof.name ? await storeUpload(env, proof, "complaint-proofs") : null;
-  await env.DB.prepare("INSERT INTO complaints VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id("cmp"), session.id, session.name, session.matricule || "STAFF", category, description, proofKey, "Pending", now()).run();
+  if (proof?.name && proof.size > 10 * 1024 * 1024) return json({ error: "Evidence must be 10 MB or smaller." }, 400);
+  const proofKey = proof && proof.name ? await storeUpload(env, proof, "complaint-evidence") : null;
+  const complaintId = id("cmp");
+  const timestamp = now();
+  const statements = [env.DB.prepare(`INSERT INTO complaints (id, user_id, student_name, matricule, category, description, proof_key, status, created_at, course_name, course_code, academic_year, semester, contact_phone)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?, ?, ?)`)
+    .bind(complaintId, session.id, session.name, session.matricule, parsed.category, parsed.description, proofKey, timestamp, courseName || null, courseCode || null, academicYear || null, semester || null, contactPhone || null)];
+  const customFields = await env.DB.prepare("SELECT * FROM complaint_form_fields WHERE active = 1 ORDER BY position, created_at").all();
+  for (const field of customFields.results) {
+    const answer = String(form.get(`custom_${field.id}`) || "").trim();
+    if (field.required && !answer) return json({ error: `${field.label} is required.` }, 400);
+    statements.push(env.DB.prepare("INSERT INTO complaint_form_answers (complaint_id, field_id, field_label, answer) VALUES (?, ?, ?, ?)").bind(complaintId, field.id, field.label, answer || null));
+  }
+  if (proofKey) statements.push(env.DB.prepare("INSERT INTO complaint_attachments (id, complaint_id, owner_id, object_key, original_name, mime_type, file_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id("attachment"), complaintId, session.id, proofKey, proof.name, proof.type || "application/octet-stream", proof.size, timestamp));
+  try { await env.DB.batch(statements); } catch (error) { if (proofKey && env.UPLOADS) await env.UPLOADS.delete(proofKey); throw error; }
+  await audit(env, session.id, "complaint.submitted", "complaint", complaintId, { category: parsed.category });
   return listComplaints(request, env);
 }
 
 async function updateComplaint(route, request, env) {
-  const session = await requireSession(request, env);
-  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
+  const session = await requireAdmin(request, env);
   const complaintId = route.split("/")[1];
   const body = await request.json();
   const status = ["Pending", "Reviewing", "Resolved"].includes(body.status) ? body.status : "Pending";
-  await env.DB.prepare("UPDATE complaints SET status = ? WHERE id = ?").bind(status, complaintId).run();
+  const response = String(body.response || "").trim().slice(0, 3000);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE complaints SET status = ? WHERE id = ?").bind(status, complaintId),
+    env.DB.prepare("INSERT INTO complaint_updates (id, complaint_id, actor_id, status, response, internal_only, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)").bind(id("complaint_update"), complaintId, session.id, status, response || null, now()),
+  ]);
   const complaint = await env.DB.prepare("SELECT user_id, category FROM complaints WHERE id = ?").bind(complaintId).first();
   if (complaint) await notify(env, complaint.user_id, "complaint", "Complaint status updated", `${complaint.category} is now ${status}.`, "/complaints");
   await audit(env, session.id, "complaint.status_updated", "complaint", complaintId, { status });
   return listComplaints(request, env);
+}
+
+async function getComplaint(route, request, env) {
+  const session = await requireSession(request, env);
+  const complaintId = route.split("/")[1];
+  const complaint = await env.DB.prepare("SELECT * FROM complaints WHERE id = ?").bind(complaintId).first();
+  if (!complaint) return json({ error: "Complaint not found." }, 404);
+  if (session.role !== "admin" && complaint.user_id !== session.id) return json({ error: "You cannot access this complaint." }, 403);
+  const updates = await env.DB.prepare("SELECT complaint_updates.*, users.name AS actor_name FROM complaint_updates JOIN users ON users.id = complaint_updates.actor_id WHERE complaint_id = ? AND (? = 1 OR internal_only = 0) ORDER BY created_at").bind(complaintId, session.role === "admin" ? 1 : 0).all();
+  const attachments = await env.DB.prepare("SELECT id, original_name, mime_type, file_size, object_key FROM complaint_attachments WHERE complaint_id = ?").bind(complaintId).all();
+  const answers = await env.DB.prepare("SELECT field_id, field_label, answer FROM complaint_form_answers WHERE complaint_id = ?").bind(complaintId).all();
+  return json({ complaint, updates: updates.results, customAnswers: answers.results, attachments: attachments.results.map((item) => ({ ...item, url: `/api/files/${encodeURIComponent(item.object_key)}` })) });
+}
+
+async function listComplaintFields(request, env) {
+  await requireSession(request, env);
+  const rows = await env.DB.prepare("SELECT id, label, field_type, options_json, required, position FROM complaint_form_fields WHERE active = 1 ORDER BY position, created_at").all();
+  return json({ fields: rows.results.map((field) => ({ ...field, options: JSON.parse(field.options_json || "[]") })) });
+}
+
+async function createComplaintField(request, env) {
+  const session = await requireAdmin(request, env);
+  const body = await request.json();
+  const label = String(body.label || "").trim();
+  const fieldType = ["text", "textarea", "number", "date", "select"].includes(body.fieldType) ? body.fieldType : "text";
+  const options = Array.isArray(body.options) ? body.options.map((item) => String(item).trim()).filter(Boolean).slice(0, 20) : [];
+  if (label.length < 2) return json({ error: "Field label is required." }, 400);
+  if (fieldType === "select" && options.length < 2) return json({ error: "A select field needs at least two options." }, 400);
+  const position = await env.DB.prepare("SELECT COALESCE(MAX(position), 0) + 1 AS next_position FROM complaint_form_fields").first();
+  const fieldId = id("complaint_field");
+  await env.DB.prepare("INSERT INTO complaint_form_fields (id, label, field_type, options_json, required, active, position, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)")
+    .bind(fieldId, label, fieldType, JSON.stringify(options), body.required ? 1 : 0, position.next_position, session.id, now(), now()).run();
+  await audit(env, session.id, "complaint_field.created", "complaint_form_field", fieldId, { label, fieldType });
+  return listComplaintFields(request, env);
+}
+
+async function deleteComplaintField(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const fieldId = route.split("/")[2];
+  await env.DB.prepare("UPDATE complaint_form_fields SET active = 0, updated_at = ? WHERE id = ?").bind(now(), fieldId).run();
+  await audit(env, session.id, "complaint_field.deleted", "complaint_form_field", fieldId);
+  return listComplaintFields(request, env);
 }
 
 async function listQuizzes(request, env) {
@@ -675,7 +927,9 @@ async function updateQuiz(route, request, env) {
 }
 
 function withoutAnswer(question) {
-  const { answer, correctOptionIndex, ...safeQuestion } = question;
+  const safeQuestion = { ...question };
+  delete safeQuestion.answer;
+  delete safeQuestion.correctOptionIndex;
   return safeQuestion;
 }
 
@@ -770,17 +1024,26 @@ async function submitQuiz(route, request, env) {
 }
 
 async function listNotes(request, env) {
-  await requireSession(request, env);
+  const session = await requireSession(request, env);
   const url = new URL(request.url);
   const search = `%${String(url.searchParams.get("q") || "").trim()}%`;
+  const department = String(url.searchParams.get("department") || "");
+  const level = String(url.searchParams.get("level") || "");
+  const semester = String(url.searchParams.get("semester") || "");
+  const academicYear = String(url.searchParams.get("academicYear") || "");
+  const manage = session.role === "staff" || session.role === "admin";
   const rows = await env.DB.prepare(`
     SELECT id, owner_id, course_code, course_title, department, level, semester, academic_year,
-      lecturer_name, original_name, mime_type, file_size, published, created_at
+      lecturer_name, original_name, mime_type, file_size, published, status, view_count, download_count, created_at, updated_at
     FROM lecture_notes
-    WHERE published = 1 AND (course_code LIKE ? COLLATE NOCASE OR course_title LIKE ? COLLATE NOCASE OR lecturer_name LIKE ? COLLATE NOCASE)
+    WHERE deleted_at IS NULL
+      AND (? = 1 OR (published = 1 AND status = 'published'))
+      AND (? = 0 OR owner_id = ?)
+      AND (course_code LIKE ? COLLATE NOCASE OR course_title LIKE ? COLLATE NOCASE OR lecturer_name LIKE ? COLLATE NOCASE)
+      AND (? = '' OR department = ?) AND (? = '' OR level = ?) AND (? = '' OR semester = ?) AND (? = '' OR academic_year = ?)
     ORDER BY created_at DESC LIMIT 100
-  `).bind(search, search, search).all();
-  return json({ notes: rows.results.map((note) => ({ ...note, file_url: `/api/files/note/${encodeURIComponent(note.id)}` })) });
+  `).bind(manage ? 1 : 0, session.role === "staff" ? 1 : 0, session.id, search, search, search, department, department, level, level, semester, semester, academicYear, academicYear).all();
+  return json({ notes: rows.results.map((note) => ({ ...note, file_url: `/api/files/note/${encodeURIComponent(note.id)}`, download_url: `/api/files/note/${encodeURIComponent(note.id)}?download=1` })) });
 }
 
 async function publishNote(request, env) {
@@ -794,11 +1057,70 @@ async function publishNote(request, env) {
   if (fileError) return json({ error: fileError }, 400);
   const objectKey = await storeUpload(env, file, "lecture-notes");
   const noteId = id("note");
-  await env.DB.prepare(`
-    INSERT INTO lecture_notes (id, owner_id, course_code, course_title, department, level, semester, academic_year, lecturer_name, object_key, original_name, mime_type, file_size, published, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-  `).bind(noteId, session.id, String(form.get("courseCode")).trim().toUpperCase(), String(form.get("courseTitle")).trim(), String(form.get("department")).trim(), String(form.get("level")).trim(), String(form.get("semester")).trim(), String(form.get("academicYear")).trim(), session.name, objectKey, file.name, file.type, file.size, now(), now()).run();
+  const timestamp = now();
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO lecture_notes (id, owner_id, course_code, course_title, department, level, semester, academic_year, lecturer_name, object_key, original_name, mime_type, file_size, published, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'published', ?, ?)`)
+        .bind(noteId, session.id, String(form.get("courseCode")).trim().toUpperCase(), String(form.get("courseTitle")).trim(), String(form.get("department")).trim(), String(form.get("level")).trim(), String(form.get("semester")).trim(), String(form.get("academicYear")).trim(), session.name, objectKey, file.name, file.type, file.size, timestamp, timestamp),
+      env.DB.prepare("INSERT INTO lecture_note_files (id, note_id, object_key, original_name, mime_type, file_size, version_number, active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)").bind(id("notefile"), noteId, objectKey, file.name, file.type, file.size, timestamp),
+    ]);
+  } catch (error) {
+    if (env.UPLOADS) await env.UPLOADS.delete(objectKey);
+    throw error;
+  }
   await audit(env, session.id, "lecture_note.published", "lecture_note", noteId, { courseCode: String(form.get("courseCode")).trim().toUpperCase() });
+  return listNotes(request, env);
+}
+
+async function ownedNote(route, session, env) {
+  const noteId = route.split("/")[1];
+  return session.role === "admin" ? env.DB.prepare("SELECT * FROM lecture_notes WHERE id = ? AND deleted_at IS NULL").bind(noteId).first() : env.DB.prepare("SELECT * FROM lecture_notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(noteId, session.id).first();
+}
+
+async function updateNote(route, request, env) {
+  const session = await requireStaff(request, env);
+  const note = await ownedNote(route, session, env);
+  if (!note) return json({ error: "Lecture note not found or not owned by this account." }, 404);
+  const body = await request.json();
+  const status = body.status === "unpublished" ? "unpublished" : "published";
+  await env.DB.prepare("UPDATE lecture_notes SET status = ?, published = ?, updated_at = ? WHERE id = ?").bind(status, status === "published" ? 1 : 0, now(), note.id).run();
+  await audit(env, session.id, `lecture_note.${status}`, "lecture_note", note.id);
+  return listNotes(request, env);
+}
+
+async function replaceNote(route, request, env) {
+  const session = await requireStaff(request, env);
+  const note = await ownedNote(route, session, env);
+  if (!note) return json({ error: "Lecture note not found or not owned by this account." }, 404);
+  const form = await request.formData();
+  const file = form.get("note");
+  const fileError = await validateDocument(file, 20 * 1024 * 1024);
+  if (fileError) return json({ error: fileError }, 400);
+  const objectKey = await storeUpload(env, file, "lecture-notes");
+  const version = await env.DB.prepare("SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version FROM lecture_note_files WHERE note_id = ?").bind(note.id).first();
+  try {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE lecture_note_files SET active = 0 WHERE note_id = ?").bind(note.id),
+      env.DB.prepare("INSERT INTO lecture_note_files (id, note_id, object_key, original_name, mime_type, file_size, version_number, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)").bind(id("notefile"), note.id, objectKey, file.name, file.type, file.size, version.next_version, now()),
+      env.DB.prepare("UPDATE lecture_notes SET object_key = ?, original_name = ?, mime_type = ?, file_size = ?, updated_at = ? WHERE id = ?").bind(objectKey, file.name, file.type, file.size, now(), note.id),
+    ]);
+  } catch (error) {
+    if (env.UPLOADS) await env.UPLOADS.delete(objectKey);
+    throw error;
+  }
+  await audit(env, session.id, "lecture_note.replaced", "lecture_note", note.id, { version: version.next_version });
+  return listNotes(request, env);
+}
+
+async function deleteNote(route, request, env) {
+  const session = await requireStaff(request, env);
+  const note = await ownedNote(route, session, env);
+  if (!note) return json({ error: "Lecture note not found or not owned by this account." }, 404);
+  const files = await env.DB.prepare("SELECT object_key FROM lecture_note_files WHERE note_id = ?").bind(note.id).all();
+  await env.DB.prepare("UPDATE lecture_notes SET published = 0, status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?").bind(now(), now(), note.id).run();
+  if (env.UPLOADS) await Promise.all(files.results.map((file) => env.UPLOADS.delete(file.object_key)));
+  await audit(env, session.id, "lecture_note.deleted", "lecture_note", note.id);
   return listNotes(request, env);
 }
 
@@ -840,11 +1162,138 @@ async function castVote(request, env) {
   return listVotes(request, env);
 }
 
-async function listLostFound(env) {
-  const rows = await env.DB.prepare("SELECT * FROM lost_items ORDER BY created_at DESC").all();
-  return json({ items: rows.results });
+async function listElections(request, env) {
+  const session = await requireSession(request, env);
+  const rows = await env.DB.prepare(`SELECT elections.*, users.name AS creator_name FROM elections JOIN users ON users.id = elections.created_by
+    WHERE ? = 1 OR elections.status <> 'draft' ORDER BY elections.opens_at DESC`).bind(session.role === "admin" ? 1 : 0).all();
+  const elections = [];
+  for (const election of rows.results) {
+    const candidates = await env.DB.prepare(`SELECT election_candidates.*, COUNT(election_votes.id) AS vote_count
+      FROM election_candidates LEFT JOIN election_votes ON election_votes.candidate_id = election_candidates.id
+      WHERE election_candidates.election_id = ? GROUP BY election_candidates.id ORDER BY election_candidates.created_at`).bind(election.id).all();
+    const myVote = session.role === "student" ? await env.DB.prepare("SELECT candidate_id FROM election_votes WHERE election_id = ? AND student_user_id = ?").bind(election.id, session.id).first() : null;
+    const timing = Date.now() < Date.parse(election.opens_at) ? "upcoming" : Date.now() >= Date.parse(election.closes_at) || ["closed", "archived"].includes(election.status) ? "closed" : election.status === "published" ? "open" : election.status;
+    elections.push({ ...election, timing, myVote: myVote?.candidate_id || null, candidates: candidates.results.map((candidate) => ({ ...candidate, vote_count: session.role === "admin" || timing === "closed" ? candidate.vote_count : undefined, image_url: candidate.image_key ? `/api/files/${encodeURIComponent(candidate.image_key)}` : null })) });
+  }
+  return json({ elections });
 }
 
+async function createElection(request, env) {
+  const session = await requireAdmin(request, env);
+  const body = await request.json();
+  const title = String(body.title || "").trim();
+  const opensAt = String(body.opensAt || "");
+  const closesAt = String(body.closesAt || "");
+  const candidates = Array.isArray(body.candidates) ? body.candidates : [];
+  if (title.length < 3 || !Date.parse(opensAt) || !Date.parse(closesAt) || Date.parse(closesAt) <= Date.parse(opensAt) || candidates.length < 2) return json({ error: "Provide a title, a valid voting window, and at least two candidates." }, 400);
+  const electionId = id("election");
+  const timestamp = now();
+  const status = ["draft", "published"].includes(body.status) ? body.status : "draft";
+  const statements = [env.DB.prepare("INSERT INTO elections (id, title, description, status, opens_at, closes_at, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(electionId, title, String(body.description || "").trim().slice(0, 2000), status, new Date(opensAt).toISOString(), new Date(closesAt).toISOString(), session.id, timestamp, timestamp)];
+  for (const candidate of candidates) {
+    if (!String(candidate.name || "").trim()) return json({ error: "Every candidate needs a name." }, 400);
+    statements.push(env.DB.prepare("INSERT INTO election_candidates (id, election_id, name, position_title, manifesto, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id("candidate"), electionId, String(candidate.name).trim(), String(candidate.positionTitle || title).trim(), String(candidate.manifesto || "").trim().slice(0, 3000), timestamp));
+  }
+  await env.DB.batch(statements);
+  await audit(env, session.id, "election.created", "election", electionId, { status, candidates: candidates.length });
+  if (status === "published") await notifyStudents(env, "election", "Student election published", title, `/voting?election=${encodeURIComponent(electionId)}`);
+  return listElections(request, env);
+}
+
+async function updateElection(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const electionId = route.split("/")[2];
+  const body = await request.json();
+  const status = ["draft", "published", "closed", "archived"].includes(body.status) ? body.status : null;
+  if (!status) return json({ error: "Invalid election status." }, 400);
+  await env.DB.prepare("UPDATE elections SET status = ?, updated_at = ? WHERE id = ?").bind(status, now(), electionId).run();
+  await audit(env, session.id, `election.${status}`, "election", electionId);
+  return listElections(request, env);
+}
+
+async function castElectionVote(route, request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "student" || !session.matricule) return json({ error: "Only registered students can vote." }, 403);
+  const electionId = route.split("/")[1];
+  const body = await request.json();
+  const election = await env.DB.prepare("SELECT * FROM elections WHERE id = ? AND status = 'published'").bind(electionId).first();
+  if (!election || Date.now() < Date.parse(election.opens_at) || Date.now() >= Date.parse(election.closes_at)) return json({ error: "This election is not open." }, 409);
+  const candidate = await env.DB.prepare("SELECT id FROM election_candidates WHERE id = ? AND election_id = ?").bind(String(body.candidateId || ""), electionId).first();
+  if (!candidate) return json({ error: "Candidate not found in this election." }, 400);
+  try {
+    await env.DB.prepare("INSERT INTO election_votes (id, election_id, candidate_id, student_user_id, created_at) VALUES (?, ?, ?, ?, ?)").bind(id("vote"), electionId, candidate.id, session.id, now()).run();
+  } catch (error) {
+    if (String(error.message).includes("UNIQUE")) return json({ error: `Matricule ${session.matricule} has already voted in this election.` }, 409);
+    throw error;
+  }
+  await audit(env, session.id, "election.vote_cast", "election", electionId);
+  return listElections(request, env);
+}
+
+async function listLostFound(request, env) {
+  const session = await requireSession(request, env);
+  const url = new URL(request.url);
+  const type = String(url.searchParams.get("type") || "");
+  const query = `%${String(url.searchParams.get("q") || "").trim()}%`;
+  const rows = await env.DB.prepare(`SELECT lost_items.*, users.name AS owner_name FROM lost_items LEFT JOIN users ON users.id = lost_items.user_id
+    WHERE deleted_at IS NULL AND (? = 1 OR status <> 'removed') AND (? = '' OR type = ?) AND (title LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE OR location LIKE ? COLLATE NOCASE)
+    ORDER BY created_at DESC LIMIT 100`).bind(session.role === "admin" ? 1 : 0, type, type, query, query, query).all();
+  return json({ items: rows.results.map((item) => ({ ...item, image_url: item.image_key ? `/api/files/${encodeURIComponent(item.image_key)}` : item.image_url })) });
+}
+
+async function createLostFound(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "student") return json({ error: "Only students can create lost and found posts." }, 403);
+  const form = await request.formData();
+  const input = parseBody(lostFoundSchema, { type: form.get("type"), title: form.get("title"), description: form.get("description"), location: form.get("location"), itemDate: form.get("itemDate"), contactPreference: form.get("contactPreference") || "in-app" });
+  const image = form.get("image");
+  const imageError = image?.name ? await validateImage(image, 10 * 1024 * 1024) : null;
+  if (imageError) return json({ error: imageError }, 400);
+  const imageKey = image?.name ? await storeUpload(env, image, "lost-found-images") : null;
+  const postId = id("item");
+  try {
+    await env.DB.prepare(`INSERT INTO lost_items (id, type, title, location, contact, image_url, created_at, user_id, description, item_date, contact_preference, image_key, status, updated_at)
+      VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?)`)
+      .bind(postId, input.type, input.title, input.location, input.contactPreference === "phone" ? session.phone : "In-app contact", now(), session.id, input.description, input.itemDate, input.contactPreference, imageKey, now()).run();
+  } catch (error) { if (imageKey && env.UPLOADS) await env.UPLOADS.delete(imageKey); throw error; }
+  await audit(env, session.id, "lost_found.created", "lost_found", postId, { type: input.type });
+  return listLostFound(request, env);
+}
+
+async function updateLostFound(route, request, env) {
+  const session = await requireSession(request, env);
+  const postId = route.split("/")[1];
+  const post = await env.DB.prepare("SELECT * FROM lost_items WHERE id = ? AND deleted_at IS NULL").bind(postId).first();
+  if (!post) return json({ error: "Post not found." }, 404);
+  if (session.role !== "admin" && post.user_id !== session.id) return json({ error: "You do not own this post." }, 403);
+  const body = await request.json();
+  const status = ["active", "resolved", "removed"].includes(body.status) ? body.status : post.status;
+  await env.DB.prepare("UPDATE lost_items SET status = ?, updated_at = ? WHERE id = ?").bind(status, now(), postId).run();
+  await audit(env, session.id, `lost_found.${status}`, "lost_found", postId);
+  return listLostFound(request, env);
+}
+
+async function deleteLostFound(route, request, env) {
+  const session = await requireSession(request, env);
+  const postId = route.split("/")[1];
+  const post = await env.DB.prepare("SELECT * FROM lost_items WHERE id = ? AND deleted_at IS NULL").bind(postId).first();
+  if (!post || (session.role !== "admin" && post.user_id !== session.id)) return json({ error: "Post not found or not owned by this account." }, 404);
+  await env.DB.prepare("UPDATE lost_items SET deleted_at = ?, status = 'removed', updated_at = ? WHERE id = ?").bind(now(), now(), postId).run();
+  if (post.image_key && env.UPLOADS) await env.UPLOADS.delete(post.image_key);
+  await audit(env, session.id, "lost_found.deleted", "lost_found", postId);
+  return listLostFound(request, env);
+}
+
+async function validateImage(file, maxSize) {
+  if (file.size > maxSize) return "Image exceeds the configured size limit.";
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  if (!["jpg", "jpeg", "png", "webp"].includes(extension)) return "Use a JPG, PNG, or WebP image.";
+  const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
+  const png = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  const webp = String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP";
+  return jpeg || png || webp ? null : "The image contents do not match its extension.";
+}
 async function listMessages(route, request, env) {
   const channel = decodeURIComponent(route.split("/")[1]);
   if (!CHANNELS.includes(channel)) return json({ error: "Forum channel not found." }, 404);
@@ -875,16 +1324,17 @@ async function createMessage(route, request, env) {
   if (!CHANNELS.includes(channel)) return json({ error: "Forum channel not found." }, 404);
   if (session.role === "staff" && !session.forum_access) return json({ error: "An administrator must grant this staff account forum access." }, 403);
   const body = await request.json();
-  if (!body.body) return json({ error: "Message cannot be empty." }, 400);
-  const settings = await env.DB.prepare("SELECT links_enabled FROM forum_settings WHERE channel = ?").bind(channel).first();
-  if (!settings?.links_enabled && containsLink(body.body)) return json({ error: "Links are disabled in this forum channel." }, 400);
+  const messageBody = parseBody(forumTextSchema, body.body);
+  const settings = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = ?").bind(channel).first();
+  if (settings?.suspended) return json({ error: settings.suspension_message || "The General Forum is temporarily suspended by administration." }, 423);
+  if (containsLink(messageBody)) return json({ error: "Links are not allowed in the General Forum." }, 400);
   let parent = null;
   if (body.parentMessageId) parent = await env.DB.prepare("SELECT id, user_id, channel FROM messages WHERE id = ? AND deleted_at IS NULL").bind(body.parentMessageId).first();
   if (body.parentMessageId && (!parent || parent.channel !== channel)) return json({ error: "The reply target is not available." }, 400);
   const messageId = id("msg");
   await env.DB.prepare("INSERT INTO messages (id, channel, user_id, author, body, created_at, parent_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .bind(messageId, channel, session.id, session.name, String(body.body).trim().slice(0, 1000), now(), parent?.id || null).run();
-  if (parent && parent.user_id !== session.id && parent.user_id !== "system") await notify(env, parent.user_id, "forum_reply", `${session.name} replied to you`, String(body.body).trim().slice(0, 180), "/forums");
+    .bind(messageId, channel, session.id, session.name, messageBody, now(), parent?.id || null).run();
+  if (parent && parent.user_id !== session.id && parent.user_id !== "system") await notify(env, parent.user_id, "forum_reply", `${session.name} replied to you`, messageBody.slice(0, 180), `/forums?message=${encodeURIComponent(messageId)}`);
   return listMessages(route, request, env);
 }
 
@@ -1053,11 +1503,20 @@ async function readFile(route, request, env) {
   const session = await requireSession(request, env);
   if (!env.UPLOADS) return json({ error: "Cloudflare R2 binding UPLOADS is not configured." }, 500);
   let key = decodeURIComponent(route.replace(/^files\//, ""));
+  let dispositionName = null;
   if (key.startsWith("note/")) {
     const noteId = key.slice(5);
-    const note = await env.DB.prepare("SELECT object_key FROM lecture_notes WHERE id = ? AND published = 1").bind(noteId).first();
+    const note = await env.DB.prepare("SELECT * FROM lecture_notes WHERE id = ? AND deleted_at IS NULL").bind(noteId).first();
     if (!note) return json({ error: "File not found." }, 404);
-    key = note.object_key;
+    if (!(note.published && note.status === "published") && session.role !== "admin" && note.owner_id !== session.id) return json({ error: "You do not have permission to view this note." }, 403);
+    const activeFile = await env.DB.prepare("SELECT * FROM lecture_note_files WHERE note_id = ? AND active = 1 ORDER BY version_number DESC LIMIT 1").bind(noteId).first();
+    key = activeFile?.object_key || note.object_key;
+    const download = new URL(request.url).searchParams.get("download") === "1";
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE lecture_notes SET ${download ? "download_count" : "view_count"} = ${download ? "download_count" : "view_count"} + 1 WHERE id = ?`).bind(noteId),
+      env.DB.prepare("INSERT INTO lecture_note_access_events (id, note_id, user_id, action, created_at) VALUES (?, ?, ?, ?, ?)").bind(id("access"), noteId, session.id, download ? "download" : "view", now()),
+    ]);
+    dispositionName = download ? activeFile?.original_name || note.original_name : null;
   } else if (!await canReadPrivateKey(env, session, key)) {
     return json({ error: "You do not have permission to view this file." }, 403);
   }
@@ -1068,13 +1527,15 @@ async function readFile(route, request, env) {
   headers.set("etag", object.httpEtag);
   for (const [name, value] of Object.entries(securityHeaders())) headers.set(name, value);
   headers.set("Cache-Control", "private, no-store");
+  if (dispositionName) headers.set("Content-Disposition", `attachment; filename="${safeFilename(dispositionName)}"`);
   return new Response(object.body, { headers });
 }
 
 async function canReadPrivateKey(env, session, key) {
   if (session.role === "staff" || session.role === "admin") return true;
   if (key.startsWith("lecture-notes/")) return true;
-  if (key.startsWith("complaint-proofs/")) return !!await env.DB.prepare("SELECT id FROM complaints WHERE user_id = ? AND proof_key = ?").bind(session.id, key).first();
+  if (key.startsWith("complaint-proofs/") || key.startsWith("complaint-evidence/")) return session.role === "admin" || !!await env.DB.prepare("SELECT id FROM complaints WHERE user_id = ? AND proof_key = ?").bind(session.id, key).first();
+  if (key.startsWith("lost-found-images/")) return !!await env.DB.prepare("SELECT id FROM lost_items WHERE image_key = ? AND deleted_at IS NULL AND status <> 'removed'").bind(key).first();
   if (key.startsWith("payment-screenshots/") || key.startsWith("thesis-files/")) return !!await env.DB.prepare("SELECT id FROM thesis_requests WHERE user_id = ? AND (screenshot_key = ? OR thesis_key = ?)").bind(session.id, key, key).first();
   return false;
 }
@@ -1087,4 +1548,253 @@ async function storeUpload(env, file, folder) {
     httpMetadata: { contentType: file.type || "application/octet-stream" },
   });
   return key;
+}
+
+async function createEvaluation(request, env) {
+  const session = await requireStaff(request, env);
+  const input = parseBody(evaluationSchema, await request.json());
+  if (new Date(input.closesAt) <= new Date(input.opensAt)) return json({ error: "Closing time must be after opening time." }, 400);
+  if (input.status === "published" && input.questions.some((question) => !question.approved)) return json({ error: "Approve every question before publication." }, 400);
+  const evaluationId = id("quiz");
+  const timestamp = now();
+  const legacyQuestions = input.questions.map((question) => ({ question: question.prompt, options: question.options, answer: question.correctOptionIndex, explanation: question.explanation, difficulty: question.difficulty, sourceSection: question.sourceSection }));
+  const statements = [env.DB.prepare(`INSERT INTO quizzes
+    (id, title, questions_json, duration_seconds, created_at, course_code, department, level, semester, academic_year, status, owner_id, instructions, difficulty, opens_at, closes_at, attempt_limit, shuffle_questions, shuffle_options, release_mode, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(evaluationId, input.title, JSON.stringify(legacyQuestions), input.durationMinutes * 60, timestamp, input.courseCode, input.department, input.level, input.semester, input.academicYear, input.status, session.id, input.instructions, input.difficulty, input.opensAt, input.closesAt, input.attemptLimit, input.shuffleQuestions ? 1 : 0, input.shuffleOptions ? 1 : 0, input.releaseMode, timestamp)];
+  input.questions.forEach((question, position) => {
+    const questionId = id("question");
+    statements.push(env.DB.prepare(`INSERT INTO evaluation_questions
+      (id, evaluation_id, position, prompt, correct_option_index, marks, explanation, difficulty, source_section, approved, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(questionId, evaluationId, position, question.prompt, question.correctOptionIndex, question.marks, question.explanation, question.difficulty, question.sourceSection, question.approved ? 1 : 0, timestamp, timestamp));
+    question.options.forEach((option, optionPosition) => statements.push(env.DB.prepare("INSERT INTO evaluation_options (id, question_id, position, option_text) VALUES (?, ?, ?, ?)").bind(id("option"), questionId, optionPosition, option)));
+  });
+  await env.DB.batch(statements);
+  await audit(env, session.id, "evaluation.created", "evaluation", evaluationId, { courseCode: input.courseCode, status: input.status, questions: input.questions.length });
+  if (input.status === "published") await notifyStudents(env, "evaluation", `${input.courseCode} evaluation published`, input.title, `/quiz?courseCode=${encodeURIComponent(input.courseCode)}`);
+  return json({ evaluation: await readEvaluationForStaff(env, evaluationId) }, 201);
+}
+
+async function ensureEvaluationQuestions(env, evaluation) {
+  const existing = await env.DB.prepare("SELECT COUNT(*) AS total FROM evaluation_questions WHERE evaluation_id = ?").bind(evaluation.id).first();
+  if (Number(existing.total)) return;
+  const questions = JSON.parse(evaluation.questions_json || "[]");
+  const timestamp = now();
+  const statements = [];
+  questions.forEach((question, position) => {
+    const questionId = id("question");
+    statements.push(env.DB.prepare(`INSERT INTO evaluation_questions
+      (id, evaluation_id, position, prompt, correct_option_index, marks, explanation, difficulty, source_section, approved, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 1, ?, ?)`)
+      .bind(questionId, evaluation.id, position, question.question || question.prompt, Number(question.answer ?? question.correctOptionIndex), question.explanation || "", question.difficulty || "medium", question.sourceSection || "", timestamp, timestamp));
+    (question.options || []).slice(0, 4).forEach((option, optionPosition) => statements.push(env.DB.prepare("INSERT INTO evaluation_options (id, question_id, position, option_text) VALUES (?, ?, ?, ?)").bind(id("option"), questionId, optionPosition, String(option))));
+  });
+  if (statements.length) await env.DB.batch(statements);
+}
+
+async function readEvaluationForStaff(env, evaluationId) {
+  const evaluation = await env.DB.prepare("SELECT * FROM quizzes WHERE id = ?").bind(evaluationId).first();
+  if (!evaluation) return null;
+  await ensureEvaluationQuestions(env, evaluation);
+  const rows = await env.DB.prepare(`SELECT evaluation_questions.*, evaluation_options.position AS option_position, evaluation_options.option_text
+    FROM evaluation_questions JOIN evaluation_options ON evaluation_options.question_id = evaluation_questions.id
+    WHERE evaluation_questions.evaluation_id = ? ORDER BY evaluation_questions.position, evaluation_options.position`).bind(evaluationId).all();
+  const questions = [];
+  for (const row of rows.results) {
+    let question = questions.find((item) => item.id === row.id);
+    if (!question) {
+      question = { id: row.id, prompt: row.prompt, correctOptionIndex: row.correct_option_index, marks: row.marks, explanation: row.explanation, difficulty: row.difficulty, sourceSection: row.source_section, approved: Boolean(row.approved), options: [] };
+      questions.push(question);
+    }
+    question.options.push(row.option_text);
+  }
+  return { ...evaluation, questions, questions_json: undefined };
+}
+
+async function getEvaluation(route, request, env) {
+  const session = await requireSession(request, env);
+  const evaluationId = route.split("/")[1];
+  const evaluation = await env.DB.prepare("SELECT * FROM quizzes WHERE id = ?").bind(evaluationId).first();
+  if (!evaluation) return json({ error: "Evaluation not found." }, 404);
+  if (session.role === "staff" || session.role === "admin") {
+    if (session.role !== "admin" && evaluation.owner_id !== session.id) return json({ error: "You do not own this evaluation." }, 403);
+    return json({ evaluation: await readEvaluationForStaff(env, evaluationId) });
+  }
+  return json({ evaluation: { id: evaluation.id, title: evaluation.title, courseCode: evaluation.course_code, instructions: evaluation.instructions, durationSeconds: evaluation.duration_seconds, opensAt: evaluation.opens_at, closesAt: evaluation.closes_at, attemptLimit: evaluation.attempt_limit } });
+}
+
+async function updateEvaluationLifecycle(route, request, env) {
+  const session = await requireStaff(request, env);
+  const evaluationId = route.split("/")[1];
+  const evaluation = session.role === "admin"
+    ? await env.DB.prepare("SELECT * FROM quizzes WHERE id = ?").bind(evaluationId).first()
+    : await env.DB.prepare("SELECT * FROM quizzes WHERE id = ? AND owner_id = ?").bind(evaluationId, session.id).first();
+  if (!evaluation) return json({ error: "Evaluation not found or not owned by this account." }, 404);
+  const body = await request.json();
+  const status = ["draft", "published", "paused", "closed", "archived"].includes(body.status) ? body.status : evaluation.status;
+  if (status === "published") {
+    await ensureEvaluationQuestions(env, evaluation);
+    const unapproved = await env.DB.prepare("SELECT COUNT(*) AS total FROM evaluation_questions WHERE evaluation_id = ? AND approved = 0").bind(evaluationId).first();
+    if (Number(unapproved.total)) return json({ error: "Approve every question before publication." }, 409);
+  }
+  await env.DB.prepare("UPDATE quizzes SET status = ?, updated_at = ?, archived_at = CASE WHEN ? = 'archived' THEN ? ELSE archived_at END WHERE id = ?").bind(status, now(), status, now(), evaluationId).run();
+  await audit(env, session.id, `evaluation.${status}`, "evaluation", evaluationId);
+  if (status === "published") await notifyStudents(env, "evaluation", `${evaluation.course_code} evaluation is open`, evaluation.title, `/quiz?courseCode=${encodeURIComponent(evaluation.course_code)}`);
+  return json({ evaluation: await readEvaluationForStaff(env, evaluationId) });
+}
+
+async function duplicateEvaluation(route, request, env) {
+  const session = await requireStaff(request, env);
+  const sourceId = route.split("/")[1];
+  const source = session.role === "admin" ? await env.DB.prepare("SELECT * FROM quizzes WHERE id = ?").bind(sourceId).first() : await env.DB.prepare("SELECT * FROM quizzes WHERE id = ? AND owner_id = ?").bind(sourceId, session.id).first();
+  if (!source) return json({ error: "Evaluation not found." }, 404);
+  const full = await readEvaluationForStaff(env, sourceId);
+  const duplicate = {
+    title: `${source.title} (Copy)`, courseCode: source.course_code, courseTitle: source.title, department: source.department || "General", level: source.level || "All", semester: source.semester || "Current", academicYear: source.academic_year || "Current",
+    instructions: source.instructions || "", durationMinutes: Math.max(1, Math.round(source.duration_seconds / 60)), opensAt: new Date().toISOString(), closesAt: new Date(Date.now() + 7 * 86400000).toISOString(), attemptLimit: source.attempt_limit || 1,
+    shuffleQuestions: Boolean(source.shuffle_questions), shuffleOptions: Boolean(source.shuffle_options), releaseMode: source.release_mode || "immediate", status: "draft", difficulty: source.difficulty || "medium", questions: full.questions.map((question) => ({ ...question, approved: false })),
+  };
+  const replacement = new Request(request.url, { method: "POST", headers: request.headers, body: JSON.stringify(duplicate) });
+  return createEvaluation(replacement, env);
+}
+
+async function startEvaluation(route, request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "student") return json({ error: "Only student accounts can start an evaluation." }, 403);
+  const evaluationId = route.split("/")[1];
+  const evaluation = await env.DB.prepare("SELECT * FROM quizzes WHERE id = ? AND status = 'published'").bind(evaluationId).first();
+  if (!evaluation) return json({ error: "This evaluation is not open." }, 404);
+  const current = Date.now();
+  if (evaluation.opens_at && Date.parse(evaluation.opens_at) > current) return json({ error: "This evaluation has not opened yet." }, 409);
+  if (evaluation.closes_at && Date.parse(evaluation.closes_at) <= current) return json({ error: "This evaluation is closed." }, 409);
+  await ensureEvaluationQuestions(env, evaluation);
+  const active = await env.DB.prepare("SELECT id FROM evaluation_attempts WHERE evaluation_id = ? AND student_user_id = ? AND status = 'active' ORDER BY attempt_number DESC LIMIT 1").bind(evaluationId, session.id).first();
+  if (active) return getEvaluationAttempt(`evaluation-attempts/${active.id}`, request, env);
+  const attempts = await env.DB.prepare("SELECT COUNT(*) AS total FROM evaluation_attempts WHERE evaluation_id = ? AND student_user_id = ?").bind(evaluationId, session.id).first();
+  const attemptNumber = Number(attempts.total) + 1;
+  if (attemptNumber > Number(evaluation.attempt_limit || 1)) return json({ error: "You have used every allowed attempt." }, 409);
+  const questionRows = await env.DB.prepare("SELECT id FROM evaluation_questions WHERE evaluation_id = ? AND approved = 1 ORDER BY position").bind(evaluationId).all();
+  if (!questionRows.results.length) return json({ error: "This evaluation has no approved questions." }, 409);
+  const questionOrder = questionRows.results.map((row) => row.id);
+  if (evaluation.shuffle_questions) secureShuffle(questionOrder);
+  const optionOrders = {};
+  for (const questionId of questionOrder) {
+    optionOrders[questionId] = [0, 1, 2, 3];
+    if (evaluation.shuffle_options) secureShuffle(optionOrders[questionId]);
+  }
+  const deadline = new Date(Math.min(current + Number(evaluation.duration_seconds) * 1000, evaluation.closes_at ? Date.parse(evaluation.closes_at) : Number.MAX_SAFE_INTEGER)).toISOString();
+  const attemptId = id("attempt");
+  await env.DB.prepare(`INSERT INTO evaluation_attempts
+    (id, evaluation_id, student_user_id, attempt_number, question_order_json, option_orders_json, started_at, deadline_at, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`)
+    .bind(attemptId, evaluationId, session.id, attemptNumber, JSON.stringify(questionOrder), JSON.stringify(optionOrders), now(), deadline, now(), now()).run();
+  await audit(env, session.id, "evaluation.attempt_started", "evaluation_attempt", attemptId, { evaluationId, attemptNumber });
+  return getEvaluationAttempt(`evaluation-attempts/${attemptId}`, request, env);
+}
+
+function secureShuffle(values) {
+  for (let index = values.length - 1; index > 0; index -= 1) {
+    const random = crypto.getRandomValues(new Uint32Array(1))[0] % (index + 1);
+    [values[index], values[random]] = [values[random], values[index]];
+  }
+  return values;
+}
+
+async function getEvaluationAttempt(route, request, env) {
+  const session = await requireSession(request, env);
+  const attemptId = route.split("/")[1];
+  let attempt = await env.DB.prepare(`SELECT evaluation_attempts.*, quizzes.title, quizzes.course_code, quizzes.instructions, quizzes.release_mode, quizzes.closes_at
+    FROM evaluation_attempts JOIN quizzes ON quizzes.id = evaluation_attempts.evaluation_id WHERE evaluation_attempts.id = ?`).bind(attemptId).first();
+  if (!attempt) return json({ error: "Attempt not found." }, 404);
+  if (session.role !== "admin" && session.role !== "staff" && attempt.student_user_id !== session.id) return json({ error: "You cannot access this attempt." }, 403);
+  if (attempt.status === "active" && Date.parse(attempt.deadline_at) <= Date.now()) {
+    await finishEvaluationAttempt(env, attempt, "timeout");
+    attempt = await env.DB.prepare(`SELECT evaluation_attempts.*, quizzes.title, quizzes.course_code, quizzes.instructions, quizzes.release_mode, quizzes.closes_at FROM evaluation_attempts JOIN quizzes ON quizzes.id = evaluation_attempts.evaluation_id WHERE evaluation_attempts.id = ?`).bind(attemptId).first();
+  }
+  const order = JSON.parse(attempt.question_order_json);
+  const optionOrders = JSON.parse(attempt.option_orders_json);
+  const placeholders = order.map(() => "?").join(",");
+  const questionRows = await env.DB.prepare(`SELECT * FROM evaluation_questions WHERE id IN (${placeholders})`).bind(...order).all();
+  const optionRows = await env.DB.prepare(`SELECT * FROM evaluation_options WHERE question_id IN (${placeholders}) ORDER BY position`).bind(...order).all();
+  const answers = await env.DB.prepare("SELECT question_id, selected_option_index FROM evaluation_answers WHERE attempt_id = ?").bind(attemptId).all();
+  const answerMap = Object.fromEntries(answers.results.map((answer) => [answer.question_id, answer.selected_option_index]));
+  const questionMap = new Map(questionRows.results.map((question) => [question.id, question]));
+  const release = attempt.status !== "active" && (attempt.release_mode === "immediate" || (attempt.release_mode === "after_close" && attempt.closes_at && Date.parse(attempt.closes_at) <= Date.now()));
+  const questions = order.map((questionId) => {
+    const question = questionMap.get(questionId);
+    const rawOptions = optionRows.results.filter((option) => option.question_id === questionId).map((option) => option.option_text);
+    const optionOrder = optionOrders[questionId] || [0, 1, 2, 3];
+    const selectedOriginal = answerMap[questionId];
+    const item = { id: questionId, prompt: question.prompt, marks: question.marks, options: optionOrder.map((position) => rawOptions[position]), selectedOptionIndex: selectedOriginal == null ? null : optionOrder.indexOf(Number(selectedOriginal)) };
+    if (release) Object.assign(item, { correctOptionIndex: optionOrder.indexOf(Number(question.correct_option_index)), explanation: question.explanation });
+    return item;
+  });
+  return json({ attempt: { id: attempt.id, evaluationId: attempt.evaluation_id, title: attempt.title, courseCode: attempt.course_code, instructions: attempt.instructions, status: attempt.status, startedAt: attempt.started_at, deadlineAt: attempt.deadline_at, remainingSeconds: attempt.status === "active" ? Math.max(0, Math.ceil((Date.parse(attempt.deadline_at) - Date.now()) / 1000)) : 0, score: attempt.score, totalMarks: attempt.total_marks, release, questions } });
+}
+
+async function saveEvaluationAnswer(route, request, env) {
+  const session = await requireSession(request, env);
+  const attemptId = route.split("/")[1];
+  const attempt = await env.DB.prepare("SELECT * FROM evaluation_attempts WHERE id = ? AND student_user_id = ?").bind(attemptId, session.id).first();
+  if (!attempt || attempt.status !== "active") return json({ error: "This attempt is no longer active." }, 409);
+  if (Date.parse(attempt.deadline_at) <= Date.now()) {
+    await finishEvaluationAttempt(env, attempt, "timeout");
+    return json({ error: "Time expired and the evaluation was submitted." }, 409);
+  }
+  const body = await request.json();
+  const questionId = String(body.questionId || "");
+  const displayIndex = Number(body.selectedOptionIndex);
+  const order = JSON.parse(attempt.question_order_json);
+  const optionOrders = JSON.parse(attempt.option_orders_json);
+  if (!order.includes(questionId) || !Number.isInteger(displayIndex) || displayIndex < 0 || displayIndex > 3) return json({ error: "Invalid answer selection." }, 400);
+  const originalIndex = optionOrders[questionId][displayIndex];
+  await env.DB.prepare(`INSERT INTO evaluation_answers (attempt_id, question_id, selected_option_index, saved_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(attempt_id, question_id) DO UPDATE SET selected_option_index = excluded.selected_option_index, saved_at = excluded.saved_at`)
+    .bind(attemptId, questionId, originalIndex, now()).run();
+  return json({ saved: true, savedAt: now() });
+}
+
+async function submitEvaluationAttempt(route, request, env) {
+  const session = await requireSession(request, env);
+  const attemptId = route.split("/")[1];
+  const attempt = await env.DB.prepare("SELECT * FROM evaluation_attempts WHERE id = ? AND student_user_id = ?").bind(attemptId, session.id).first();
+  if (!attempt) return json({ error: "Attempt not found." }, 404);
+  if (attempt.status === "active") await finishEvaluationAttempt(env, attempt, Date.parse(attempt.deadline_at) <= Date.now() ? "timeout" : "submitted");
+  await audit(env, session.id, "evaluation.attempt_submitted", "evaluation_attempt", attemptId);
+  return getEvaluationAttempt(`evaluation-attempts/${attemptId}`, request, env);
+}
+
+async function finishEvaluationAttempt(env, attempt, reason) {
+  const answers = await env.DB.prepare(`SELECT evaluation_answers.selected_option_index, evaluation_questions.correct_option_index, evaluation_questions.marks
+    FROM evaluation_questions LEFT JOIN evaluation_answers ON evaluation_answers.question_id = evaluation_questions.id AND evaluation_answers.attempt_id = ?
+    WHERE evaluation_questions.evaluation_id = ?`).bind(attempt.id, attempt.evaluation_id).all();
+  const totalMarks = answers.results.reduce((sum, item) => sum + Number(item.marks), 0);
+  const score = answers.results.reduce((sum, item) => sum + (Number(item.selected_option_index) === Number(item.correct_option_index) ? Number(item.marks) : 0), 0);
+  await env.DB.prepare("UPDATE evaluation_attempts SET status = ?, submit_reason = ?, submitted_at = ?, score = ?, total_marks = ?, updated_at = ? WHERE id = ? AND status = 'active'")
+    .bind(reason === "timeout" ? "timed_out" : "submitted", reason, now(), score, totalMarks, now(), attempt.id).run();
+  await notify(env, attempt.student_user_id, "evaluation_result", "Evaluation submitted", `Your attempt was ${reason === "timeout" ? "submitted when time expired" : "submitted successfully"}.`, `/quiz?attempt=${encodeURIComponent(attempt.id)}`);
+}
+
+async function evaluationResults(route, request, env, exportCsv) {
+  const session = await requireStaff(request, env);
+  const evaluationId = route.split("/")[1];
+  const owned = session.role === "admin" ? await env.DB.prepare("SELECT id, title FROM quizzes WHERE id = ?").bind(evaluationId).first() : await env.DB.prepare("SELECT id, title FROM quizzes WHERE id = ? AND owner_id = ?").bind(evaluationId, session.id).first();
+  if (!owned) return json({ error: "Evaluation not found." }, 404);
+  const rows = await env.DB.prepare(`SELECT evaluation_attempts.*, users.name, users.matricule,
+    CAST((julianday(COALESCE(submitted_at, updated_at)) - julianday(started_at)) * 86400 AS INTEGER) AS completion_seconds
+    FROM evaluation_attempts JOIN users ON users.id = evaluation_attempts.student_user_id WHERE evaluation_id = ? ORDER BY created_at DESC`).bind(evaluationId).all();
+  if (!exportCsv) return json({ attempts: rows.results });
+  const escape = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const csv = ["Student,Matricule,Attempt,Status,Score,Total,Completion seconds,Submitted", ...rows.results.map((row) => [row.name, row.matricule, row.attempt_number, row.status, row.score, row.total_marks, row.completion_seconds, row.submitted_at].map(escape).join(","))].join("\n");
+  return new Response(csv, { headers: { ...securityHeaders(), "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${safeFilename(owned.title)}-results.csv"` } });
+}
+
+function safeFilename(value) {
+  return String(value || "download").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "download";
+}
+
+async function notifyStudents(env, type, title, body, deepLink) {
+  const students = await env.DB.prepare("SELECT id FROM users WHERE role = 'student' AND account_status = 'active'").all();
+  if (students.results.length) await env.DB.batch(students.results.map((student) => env.DB.prepare("INSERT INTO notifications (id, user_id, type, title, body, deep_link, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id("notification"), student.id, type, title, body, deepLink, now())));
 }
