@@ -3,11 +3,13 @@ import { useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 
-const groups = [
-  { label: "Academics", items: [{ label: "Evaluation", to: "/quiz" }, { label: "Lecture Notes", to: "/notes" }, { label: "Plagiarism Test", to: "/thesis" }] },
-  { label: "Student Services", items: [{ label: "Complaints Desk", to: "/complaints" }, { label: "Lost & Found", to: "/lost-found" }] },
-  { label: "Campus Life", items: [{ label: "Announcements", to: "/announcements" }, { label: "Student Voting", to: "/voting" }, { label: "General Forum", to: "/forums" }] },
-];
+function navigationGroups(staff) {
+  return [
+    { label: "Academics", items: [{ label: "Evaluation", to: "/quiz" }, { label: "Lecture Notes", to: "/notes" }, { label: "Plagiarism Test", to: "/thesis" }, ...(staff ? [{ label: "Verify Thesis Result", to: "/verify-thesis" }] : [])] },
+    { label: "Student Services", items: [{ label: "Complaints Desk", to: "/complaints" }, { label: "Document Requests", to: "/documents" }, { label: "Lost & Found", to: "/lost-found" }] },
+    { label: "Campus Life", items: [{ label: "Announcements", to: "/announcements" }, { label: "Student Voting", to: "/voting" }, { label: "Forums", to: "/forums" }] },
+  ];
+}
 
 export default function Navbar() {
   const [profileOpen, setProfileOpen] = useState(false);
@@ -27,7 +29,7 @@ export default function Navbar() {
         </Link>
 
         {session && <div className="hidden items-center gap-1 lg:flex">
-          {groups.map((group) => <Dropdown key={group.label} group={group} />)}
+          {navigationGroups(staff).map((group) => <Dropdown key={group.label} group={group} />)}
         </div>}
 
         <div className="flex items-center gap-2 sm:gap-4">
