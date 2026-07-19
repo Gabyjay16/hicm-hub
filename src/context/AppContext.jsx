@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { api, patchJson, postJson } from "../utils/api";
+import { api, patchJson, postJson, setCsrfToken } from "../utils/api";
 
 const AppContext = createContext(null);
 
@@ -11,10 +11,13 @@ export function AppProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
+  const [offline, setOffline] = useState(!navigator.onLine);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   async function refreshSession() {
     const data = await api("/session");
     setSession(data.session);
+    setCsrfToken(data.session?.csrfToken || "");
     setCandidates(data.candidates || []);
     setChannels(data.channels || []);
     setLoading(false);
@@ -23,6 +26,20 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     refreshSession().catch(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const online = () => setOffline(false);
+    const offlineHandler = () => setOffline(true);
+    const expired = () => { setSession(null); setCsrfToken(""); setSessionExpired(true); };
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offlineHandler);
+    window.addEventListener("hicm:session-expired", expired);
+    return () => {
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offlineHandler);
+      window.removeEventListener("hicm:session-expired", expired);
+    };
   }, []);
 
   useEffect(() => {
@@ -44,6 +61,8 @@ export function AppProvider({ children }) {
   async function authenticate(payload) {
     const data = await postJson("/auth", payload);
     setSession(data.session);
+    setCsrfToken(data.session?.csrfToken || "");
+    setSessionExpired(false);
     setAuthOpen(false);
     setToast(`Signed in as ${data.session.user.name}`);
   }
@@ -51,6 +70,7 @@ export function AppProvider({ children }) {
   async function logout() {
     await postJson("/logout", {});
     setSession(null);
+    setCsrfToken("");
     setToast("Signed out");
   }
 
@@ -91,7 +111,10 @@ export function AppProvider({ children }) {
     unreadCount,
     toast,
     setToast,
-  }), [session, candidates, channels, loading, authOpen, toast, unreadCount]);
+    offline,
+    sessionExpired,
+    dismissSessionExpired: () => setSessionExpired(false),
+  }), [session, candidates, channels, loading, authOpen, toast, unreadCount, offline, sessionExpired]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
