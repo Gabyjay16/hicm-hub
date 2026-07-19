@@ -129,6 +129,7 @@ function StudentWorkflow({ request, processing, onPayment, onUpload, onRetry }) 
 
       <div className="panel p-6">
         <h2 className="text-xl font-black">Analysis Dashboard</h2>
+        {request.analysis?.officialResult && <OfficialResult result={request.analysis.officialResult} />}
         {request.analysisJob?.status === "queued" || request.analysisJob?.status === "processing" ? (
           <div className="mt-6"><div className="flex items-center justify-between text-sm font-bold"><span>{request.analysisJob.status === "queued" ? "Waiting for an analysis worker" : "Extracting and comparing text"}</span><span>{request.analysisJob.progress}%</span></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-teal-700 transition-all" style={{ width: `${request.analysisJob.progress}%` }} /></div><p className="mt-4 text-sm leading-6 text-slate-500">You may leave this page. The job continues in Cloudflare and the report will be available here when complete.</p></div>
         ) : request.analysisJob?.status === "failed" ? (
@@ -185,6 +186,10 @@ function AdminTable({ requests, onReview }) {
       </div>
     </div>
   );
+}
+
+function OfficialResult({ result }) {
+  return <section className="mt-5 overflow-hidden rounded-lg border border-teal-200"><div className="bg-teal-50 p-4"><p className="text-xs font-bold uppercase text-teal-700">Official Published Result</p><h3 className="mt-1 text-lg font-black text-navy">{result.thesisTitle}</h3></div><div className="grid gap-4 p-4 sm:grid-cols-2"><Circle label="Plagiarism Detected" value={result.plagiarismPercent ?? 0} color="#b45309" /><Circle label="AI Generated Content" value={result.aiUsePercent ?? 0} color="#007f7a" /></div><div className="border-t border-slate-200 px-4 py-4"><p className="text-xs font-bold uppercase text-slate-500">Verification Code</p><div className="mt-2 flex flex-wrap items-center justify-between gap-3"><code className="text-base font-black text-navy">{result.verificationCode}</code><button type="button" className="btn-secondary px-3 py-1.5" onClick={() => navigator.clipboard?.writeText(result.verificationCode)}>Copy Code</button></div></div></section>;
 }
 
 function Circle({ label, value, color }) {
