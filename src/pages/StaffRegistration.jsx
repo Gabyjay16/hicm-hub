@@ -25,7 +25,7 @@ export default function StaffRegistration() {
     if (password !== confirmPassword) { setToast("The passwords do not match."); return; }
     setBusy(true);
     try {
-      await authenticate({ role: "staff", name: form.get("name"), credential: code, accessCode: code, position: form.get("position"), phone: form.get("phone"), password, confirmPassword });
+      await authenticate({ mode: "staff-register", role: "staff", name: form.get("name"), credential: code, accessCode: code, position: form.get("position"), phone: form.get("phone"), password, confirmPassword, remember: true });
       navigate("/");
     } catch (error) { setToast(error.message); } finally { setBusy(false); }
   }
