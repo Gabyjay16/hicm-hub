@@ -1,4 +1,4 @@
-import { Activity, Ban, Check, ClipboardList, Copy, KeyRound, RefreshCw, ShieldCheck, Users, X } from "lucide-react";
+import { Activity, Ban, Check, ClipboardList, KeyRound, RefreshCw, ShieldCheck, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
@@ -11,14 +11,14 @@ const tabs = ["Overview", "Users", "Staff Codes", "Forum", "Analysis", "Audit", 
 export default function Admin() {
   const { user, setToast, setAuthOpen } = useApp();
   const [tab, setTab] = useState("Overview");
-  const [data, setData] = useState({ metrics: {}, users: [], codes: [], reports: [], jobs: [], logs: [] });
+  const [data, setData] = useState({ metrics: {}, users: [], codes: [], reports: [], jobs: [], logs: [], forumSettings: {} });
   const [loading, setLoading] = useState(true);
 
   async function load() {
     setLoading(true);
-    const endpoints = ["/admin/overview", "/admin/users", "/admin/staff-codes", "/admin/forum/reports", "/admin/analysis", "/admin/audit"];
-    const [overview, users, codes, reports, jobs, logs] = await Promise.all(endpoints.map((path) => api(path)));
-    setData({ metrics: overview.metrics, users: users.users, codes: codes.codes, reports: reports.reports, jobs: jobs.jobs, logs: logs.logs });
+    const endpoints = ["/admin/overview", "/admin/users", "/admin/staff-codes", "/admin/forum/reports", "/admin/analysis", "/admin/audit", "/admin/forum/settings"];
+    const [overview, users, codes, reports, jobs, logs, forumSettings] = await Promise.all(endpoints.map((path) => api(path)));
+    setData({ metrics: overview.metrics, users: users.users, codes: codes.codes, reports: reports.reports, jobs: jobs.jobs, logs: logs.logs, forumSettings: forumSettings.settings || {} });
     setLoading(false);
   }
 
@@ -55,6 +55,12 @@ export default function Admin() {
     await load();
   }
 
+  async function updateForumSettings(changes) {
+    await patchJson("/admin/forum/settings", { channel: "General", ...changes });
+    setToast(changes.suspended ? "General Forum suspended" : "General Forum reopened");
+    await load();
+  }
+
   async function changePassword(currentPassword, newPassword) {
     try {
       await patchJson("/account/password", { currentPassword, newPassword });
@@ -70,16 +76,16 @@ export default function Admin() {
     <div className="page-shell">
       <div className="flex flex-wrap items-start justify-between gap-4"><PageHeader eyebrow="Control plane" title="Administration" description="Accounts, access codes, forum governance, analysis operations, and immutable audit events." /><button onClick={load} className="btn-secondary mt-2"><RefreshCw size={16} /> Refresh</button></div>
       <div className="mb-6 flex gap-1 overflow-x-auto border-b border-slate-200" role="tablist">{tabs.map((item) => <button key={item} onClick={() => setTab(item)} className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-bold ${tab === item ? "border-teal-700 text-teal-800" : "border-transparent text-slate-500"}`}>{item}</button>)}</div>
-      {loading ? <div className="panel p-8 text-slate-500">Loading administration data...</div> : <AdminTab tab={tab} data={data} createCode={createCode} revokeCode={revokeCode} updateUser={updateUser} reviewReport={reviewReport} changePassword={changePassword} />}
+      {loading ? <div className="panel p-8 text-slate-500">Loading administration data...</div> : <AdminTab tab={tab} data={data} createCode={createCode} revokeCode={revokeCode} updateUser={updateUser} reviewReport={reviewReport} updateForumSettings={updateForumSettings} changePassword={changePassword} />}
     </div>
   );
 }
 
-function AdminTab({ tab, data, createCode, revokeCode, updateUser, reviewReport, changePassword }) {
+function AdminTab({ tab, data, createCode, revokeCode, updateUser, reviewReport, updateForumSettings, changePassword }) {
   if (tab === "Overview") return <Overview metrics={data.metrics} />;
   if (tab === "Users") return <UsersTable users={data.users} updateUser={updateUser} />;
   if (tab === "Staff Codes") return <Codes codes={data.codes} createCode={createCode} revokeCode={revokeCode} />;
-  if (tab === "Forum") return <ForumAdmin reports={data.reports} reviewReport={reviewReport} />;
+  if (tab === "Forum") return <ForumAdmin reports={data.reports} settings={data.forumSettings} reviewReport={reviewReport} updateSettings={updateForumSettings} />;
   if (tab === "Analysis") return <AnalysisJobs jobs={data.jobs} />;
   if (tab === "Audit") return <Audit logs={data.logs} />;
   return <Security changePassword={changePassword} />;
@@ -102,8 +108,9 @@ function Codes({ codes, createCode, revokeCode }) {
   return <div className="grid gap-5"><div className="panel flex flex-wrap items-center justify-between gap-4 p-5"><div><h2 className="font-black text-navy">Issue a single-use registration code</h2><p className="mt-1 text-sm text-slate-500">The code expires automatically and is atomically consumed by one staff account.</p></div><div className="flex gap-2"><button onClick={() => createCode(24)} className="btn-primary"><KeyRound size={17} /> 24 hours</button><button onClick={() => createCode(168)} className="btn-secondary">7 days</button></div></div><Table headers={["Code", "Created by", "Expires", "State", "Action"]}>{codes.map((code) => { const state = code.used_at ? "Used" : code.revoked_at ? "Revoked" : new Date(code.expires_at) < new Date() ? "Expired" : "Active"; return <tr key={code.id} className="border-t border-slate-200"><td className="p-4 font-mono font-bold">{code.code}</td><td className="p-4">{code.creator_name || "System"}</td><td className="p-4 text-sm">{new Date(code.expires_at).toLocaleString()}</td><td className="p-4"><StatusBadge status={state} /></td><td className="p-4">{state === "Active" && <button onClick={() => revokeCode(code.id)} className="btn-secondary px-3 py-1.5"><X size={15} /> Revoke</button>}</td></tr>; })}</Table></div>;
 }
 
-function ForumAdmin({ reports, reviewReport }) {
-  return <div className="grid gap-5"><div className="panel p-5"><h2 className="font-black text-navy">Channel capabilities</h2><p className="mt-1 text-sm text-slate-500">Text and replies are enabled. Links, images, and audio remain disabled by default to protect the campus forum.</p></div><Table headers={["Message", "Reporter", "Reason", "Status", "Actions"]}>{reports.map((report) => <tr key={report.id} className="border-t border-slate-200"><td className="max-w-sm p-4"><p className="font-bold">{report.author}</p><p className="truncate text-sm text-slate-500">{report.body}</p></td><td className="p-4">{report.reporter_name}</td><td className="p-4">{report.reason}</td><td className="p-4"><StatusBadge status={report.status} /></td><td className="p-4"><div className="flex gap-2">{report.status === "open" && <><button onClick={() => reviewReport(report.id, "actioned")} className="btn-primary px-3 py-1.5">Remove</button><button onClick={() => reviewReport(report.id, "dismissed")} className="btn-secondary px-3 py-1.5">Dismiss</button></>}</div></td></tr>)}</Table></div>;
+function ForumAdmin({ reports, settings, reviewReport, updateSettings }) {
+  const suspended = Boolean(settings?.suspended);
+  return <div className="grid gap-5"><div className="panel flex flex-wrap items-center justify-between gap-4 p-5"><div><h2 className="font-black text-navy">General Forum availability</h2><p className="mt-1 text-sm text-slate-500">Suspension immediately prevents every participant from sending messages.</p></div><Toggle checked={!suspended} onChange={(open) => updateSettings({ suspended: !open, suspensionMessage: "The General Forum is temporarily suspended by administration." })} label="Forum open" /></div><Table headers={["Message", "Reporter", "Reason", "Status", "Actions"]}>{reports.map((report) => <tr key={report.id} className="border-t border-slate-200"><td className="max-w-sm p-4"><p className="font-bold">{report.author}</p><p className="truncate text-sm text-slate-500">{report.body}</p></td><td className="p-4">{report.reporter_name}</td><td className="p-4">{report.reason}</td><td className="p-4"><StatusBadge status={report.status} /></td><td className="p-4"><div className="flex gap-2">{report.status === "open" && <><button onClick={() => reviewReport(report.id, "actioned")} className="btn-primary px-3 py-1.5">Remove</button><button onClick={() => reviewReport(report.id, "dismissed")} className="btn-secondary px-3 py-1.5">Dismiss</button></>}</div></td></tr>)}</Table></div>;
 }
 
 function AnalysisJobs({ jobs }) {
