@@ -62,6 +62,8 @@ export function AppProvider({ children }) {
     const data = await postJson("/auth", payload);
     setSession(data.session);
     setCsrfToken(data.session?.csrfToken || "");
+    setCandidates(data.candidates || []);
+    setChannels(data.channels || []);
     setSessionExpired(false);
     setAuthOpen(false);
     setToast(`Signed in as ${data.session.user.name}`);
