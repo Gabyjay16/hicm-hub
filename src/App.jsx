@@ -10,6 +10,8 @@ import Voting from "./pages/Voting";
 import LostFound from "./pages/LostFound";
 import Forums from "./pages/Forums";
 import Thesis from "./pages/Thesis";
+import Admin from "./pages/Admin";
+import Notifications from "./pages/Notifications";
 
 export default function App() {
   return (
@@ -25,6 +27,8 @@ export default function App() {
           <Route path="/lost-found" element={<LostFound />} />
           <Route path="/forums" element={<Forums />} />
           <Route path="/thesis" element={<Thesis />} />
+          <Route path="/admin" element={<Admin />} />
+          <Route path="/alerts" element={<Notifications />} />
         </Routes>
       </main>
       <AuthModal />
