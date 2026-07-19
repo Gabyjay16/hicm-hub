@@ -45,7 +45,7 @@ export function AppProvider({ children }) {
     const next = session.viewRole === "staff" ? "student" : "staff";
     const data = await patchJson("/session/role", { viewRole: next });
     setSession(data.session);
-    setToast(`${next === "staff" ? "Staff/Admin" : "Student"} view enabled`);
+    setToast(`${data.session.viewRole === "staff" ? "Staff" : "Student"} portal enabled`);
   }
 
   function requireAuth() {
