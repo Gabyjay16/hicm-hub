@@ -1,79 +1,70 @@
-import { ChevronDown, GraduationCap, LogIn, Menu, ShieldCheck, UserRound, X } from "lucide-react";
+import { Bell, BriefcaseBusiness, ChevronDown, GraduationCap, Home, LogIn, MessageSquare, ShieldCheck, UserRound } from "lucide-react";
 import { useState } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 
 const groups = [
-  { label: "Academics", items: [{ label: "Notes & MCQs", to: "/quiz" }, { label: "Thesis Checker", to: "/thesis" }] },
+  { label: "Academics", items: [{ label: "Evaluation", to: "/quiz" }, { label: "Lecture Notes", to: "/quiz" }, { label: "Plagiarism Test", to: "/thesis" }] },
   { label: "Student Services", items: [{ label: "Complaints Desk", to: "/complaints" }, { label: "Lost & Found", to: "/lost-found" }] },
-  { label: "Campus Life", items: [{ label: "Announcements", to: "/announcements" }, { label: "Student Voting", to: "/voting" }, { label: "Chat Forums", to: "/forums" }] },
+  { label: "Campus Life", items: [{ label: "Announcements", to: "/announcements" }, { label: "Student Voting", to: "/voting" }, { label: "General Forum", to: "/forums" }] },
 ];
 
 export default function Navbar() {
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const { session, user, viewRole, setAuthOpen, logout, toggleRole } = useApp();
+  const location = useLocation();
+  const staff = viewRole === "staff";
 
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
-      <nav className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
+    <>
+    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/98">
+      <nav className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <Link to="/" className="flex items-center gap-3">
-          <span className="grid h-11 w-11 place-items-center rounded-lg bg-teal-700 text-white shadow-soft">
-            <GraduationCap size={25} />
+          <span className="grid h-12 w-12 place-items-center rounded-sm bg-navy text-white">
+            <GraduationCap size={27} />
           </span>
-          <span>
-            <span className="block text-lg font-black tracking-wide text-slate-950">HICM HUB</span>
-            <span className="hidden text-xs font-semibold uppercase text-teal-700 sm:block">University Services Portal</span>
-          </span>
+          <span className="font-serif text-xl font-bold text-navy sm:text-2xl">{staff ? "Staff Portal" : "HICM Portal"}</span>
         </Link>
 
         <div className="hidden items-center gap-1 lg:flex">
           {groups.map((group) => <Dropdown key={group.label} group={group} />)}
         </div>
 
-        <div className="hidden items-center gap-2 lg:flex">
-          <button onClick={toggleRole} className="btn-secondary" title="Switch testing role">
-            <ShieldCheck size={17} />
-            {viewRole === "staff" ? "Staff/Admin View" : "Student View"}
-          </button>
+        <div className="flex items-center gap-2 sm:gap-4">
+          <Link to="/announcements" className="relative grid h-10 w-10 place-items-center text-navy" aria-label="Notifications">
+            <Bell size={23} />
+            <span className="absolute right-0 top-0 grid h-5 min-w-5 place-items-center rounded-full bg-teal-700 px-1 text-[11px] font-bold text-white">1</span>
+          </Link>
           {session ? (
-            <>
-              <span className="max-w-40 truncate rounded-md bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
-                {user.name}
-              </span>
-              <button onClick={logout} className="btn-secondary">Logout</button>
-            </>
+            <div className="relative">
+              <button onClick={() => setProfileOpen((open) => !open)} className="flex max-w-48 items-center gap-2 px-1 py-2 text-sm font-semibold text-navy sm:text-base">
+                <span className="max-w-28 truncate sm:max-w-40">{user.name}</span><ChevronDown size={18} />
+              </button>
+              {profileOpen && (
+                <div className="absolute right-0 top-full z-50 w-56 rounded-md border border-slate-200 bg-white p-2 shadow-soft">
+                  {user.role === "staff" && <button onClick={() => { toggleRole(); setProfileOpen(false); }} className="nav-menu-action"><ShieldCheck size={17} /> Switch portal view</button>}
+                  <button onClick={() => { logout(); setProfileOpen(false); }} className="nav-menu-action"><LogIn size={17} /> Sign out</button>
+                </div>
+              )}
+            </div>
           ) : (
-            <button onClick={() => setAuthOpen(true)} className="btn-primary"><LogIn size={17} /> Login</button>
+            <button onClick={() => setAuthOpen(true)} className="btn-primary"><LogIn size={17} /> <span className="hidden sm:inline">Login</span></button>
           )}
         </div>
-
-        <button className="btn-secondary px-3 lg:hidden" onClick={() => setMobileOpen((open) => !open)} aria-label="Open menu">
-          {mobileOpen ? <X size={19} /> : <Menu size={19} />}
-        </button>
       </nav>
-
-      {mobileOpen && (
-        <div className="border-t border-slate-200 bg-white px-4 py-4 lg:hidden">
-          <div className="space-y-4">
-            {groups.map((group) => (
-              <div key={group.label}>
-                <p className="mb-2 text-xs font-black uppercase text-slate-500">{group.label}</p>
-                <div className="grid gap-2">
-                  {group.items.map((item) => (
-                    <NavLink key={item.to} to={item.to} onClick={() => setMobileOpen(false)} className="rounded-md px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-teal-50">
-                      {item.label}
-                    </NavLink>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <button onClick={toggleRole} className="btn-secondary w-full"><ShieldCheck size={17} /> {viewRole === "staff" ? "Staff/Admin View" : "Student View"}</button>
-            {session ? <button onClick={logout} className="btn-secondary w-full">Logout</button> : <button onClick={() => setAuthOpen(true)} className="btn-primary w-full"><UserRound size={17} /> Login / Register</button>}
-          </div>
-        </div>
-      )}
     </header>
+    <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
+      <MobileLink to="/" label="Home" icon={Home} active={location.pathname === "/"} />
+      <MobileLink to={staff ? "/quiz" : "/forums"} label={staff ? "Academic Tools" : "Forum"} icon={staff ? BriefcaseBusiness : MessageSquare} active={location.pathname === (staff ? "/quiz" : "/forums")} />
+      <MobileLink to="/announcements" label="Alerts" icon={Bell} active={location.pathname === "/announcements"} />
+      <button aria-label={session ? "Open profile menu" : "Login"} onClick={() => session ? setProfileOpen((open) => !open) : setAuthOpen(true)} className="mobile-nav-item"><UserRound size={23} /><span>Profile</span></button>
+    </nav>
+    </>
   );
+}
+
+function MobileLink({ to, label, icon: Icon, active }) {
+  return <Link to={to} className={`mobile-nav-item ${active ? "is-active" : ""}`}><Icon size={23} /><span>{label}</span></Link>;
 }
 
 function Dropdown({ group }) {
