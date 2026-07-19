@@ -1,12 +1,12 @@
-import { Check, FileSearch, FileUp, ShieldAlert, X } from "lucide-react";
+import { Check, FileSearch, FileUp, RefreshCw, ShieldAlert, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
 import StatusBadge from "../components/StatusBadge";
 import { useApp } from "../context/AppContext";
-import { api, patchJson } from "../utils/api";
+import { api, patchJson, postJson } from "../utils/api";
 
 export default function Thesis() {
-  const { viewRole, requireAuth, setToast } = useApp();
+  const { viewRole, user, requireAuth, setToast } = useApp();
   const [data, setData] = useState(null);
   const [processing, setProcessing] = useState(false);
 
@@ -18,6 +18,13 @@ export default function Thesis() {
   useEffect(() => {
     load().catch(() => {});
   }, [viewRole]);
+
+  useEffect(() => {
+    const status = data?.request?.analysisJob?.status;
+    if (status !== "queued" && status !== "processing") return undefined;
+    const timer = setInterval(() => load().catch(() => {}), 3500);
+    return () => clearInterval(timer);
+  }, [data?.request?.analysisJob?.status]);
 
   async function submitPayment(event) {
     event.preventDefault();
@@ -43,10 +50,9 @@ export default function Thesis() {
     setProcessing(true);
     const form = new FormData(event.currentTarget);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
       const response = await api("/thesis/upload", { method: "POST", body: form });
       setData(response);
-      setToast("Analysis complete");
+      setToast("Thesis queued for deterministic analysis");
     } catch (error) {
       setToast(error.message);
     } finally {
@@ -54,20 +60,30 @@ export default function Thesis() {
     }
   }
 
+  async function retry(jobId) {
+    try {
+      const response = await postJson(`/thesis/jobs/${jobId}/retry`, {});
+      setData((current) => ({ ...current, request: { ...current.request, analysisJob: response.job } }));
+      setToast("Analysis queued again");
+    } catch (error) { setToast(error.message); }
+  }
+
   return (
     <div className="page-shell">
       <PageHeader eyebrow="Academics" title="Plagiarism Test" description="Admin-gated AI-assisted originality report with payment screenshot verification." />
 
-      {viewRole === "staff" ? (
+      {viewRole === "staff" && user?.role === "admin" ? (
         <AdminTable requests={data?.requests || []} onReview={review} />
+      ) : viewRole === "staff" ? (
+        <div className="panel mx-auto max-w-2xl p-8 text-center"><ShieldAlert className="mx-auto text-teal-700" size={36} /><h2 className="mt-4 text-xl font-black text-navy">Administrator approval required</h2><p className="mt-2 text-sm leading-6 text-slate-500">Payment screenshots and thesis reports contain private student records. Ask a platform administrator when a review is required.</p></div>
       ) : (
-        <StudentWorkflow request={data?.request} processing={processing} onPayment={submitPayment} onUpload={uploadThesis} />
+        <StudentWorkflow request={data?.request} processing={processing} onPayment={submitPayment} onUpload={uploadThesis} onRetry={retry} />
       )}
     </div>
   );
 }
 
-function StudentWorkflow({ request, processing, onPayment, onUpload }) {
+function StudentWorkflow({ request, processing, onPayment, onUpload, onRetry }) {
   if (!request || request.status === "locked" || request.status === "rejected") {
     return (
       <div className="mx-auto max-w-2xl panel overflow-hidden">
@@ -113,17 +129,19 @@ function StudentWorkflow({ request, processing, onPayment, onUpload }) {
 
       <div className="panel p-6">
         <h2 className="text-xl font-black">Analysis Dashboard</h2>
-        {request.analysis ? (
+        {request.analysisJob?.status === "queued" || request.analysisJob?.status === "processing" ? (
+          <div className="mt-6"><div className="flex items-center justify-between text-sm font-bold"><span>{request.analysisJob.status === "queued" ? "Waiting for an analysis worker" : "Extracting and comparing text"}</span><span>{request.analysisJob.progress}%</span></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-teal-700 transition-all" style={{ width: `${request.analysisJob.progress}%` }} /></div><p className="mt-4 text-sm leading-6 text-slate-500">You may leave this page. The job continues in Cloudflare and the report will be available here when complete.</p></div>
+        ) : request.analysisJob?.status === "failed" ? (
+          <div className="mt-6 rounded-md border border-rose-200 bg-rose-50 p-5 text-rose-950"><h3 className="font-black">Analysis could not finish</h3><p className="mt-2 text-sm leading-6">{request.analysisJob.error}</p><button onClick={() => onRetry(request.analysisJob.id)} className="btn-secondary mt-4"><RefreshCw size={16} /> Retry analysis</button></div>
+        ) : request.analysis ? (
           <>
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <Circle label="Measured Internal Similarity" value={request.analysis.similarity ?? 0} color="#007f7a" />
-              <div className="rounded-lg border border-slate-200 p-5"><p className="font-black text-slate-800">Coverage</p><p className="mt-3 text-sm leading-6 text-slate-600">{request.analysis.coverage}</p></div>
+              <div className="rounded-lg border border-slate-200 p-5"><p className="font-black text-slate-800">Evidence Summary</p><p className="mt-3 text-3xl font-black text-navy">{request.analysis.matchedShingles} / {request.analysis.totalShingles}</p><p className="mt-2 text-sm leading-6 text-slate-600">unique seven-word sequences matched the internal corpus.</p></div>
             </div>
-            <div className="mt-6 grid gap-3">
-              {request.analysis.excerpts.map((excerpt) => (
-                <p key={excerpt} className="rounded-lg border-l-4 border-amber-500 bg-amber-50 p-4 text-sm leading-6 text-amber-950">{excerpt}</p>
-              ))}
-            </div>
+            <p className="mt-5 rounded-md bg-slate-50 p-4 text-sm leading-6 text-slate-600">{request.analysis.coverage}</p>
+            <section className="mt-6"><h3 className="font-black text-navy">Matched sources</h3><div className="mt-3 grid gap-3">{request.analysis.matches?.length ? request.analysis.matches.map((match, index) => <article key={`${match.sourceName}-${index}`} className="rounded-md border-l-4 border-amber-500 bg-amber-50 p-4"><div className="flex justify-between gap-4 text-sm font-black text-amber-950"><span className="truncate">{match.sourceName}</span><span>{match.similarity}%</span></div><p className="mt-2 text-sm leading-6 text-amber-950">...{match.excerpt}...</p></article>) : <p className="text-sm text-slate-500">No internal source produced an exact seven-word match.</p>}</div></section>
+            <section className="mt-6"><h3 className="font-black text-navy">Review recommendations</h3><ul className="mt-3 grid gap-2">{request.analysis.recommendations?.map((item) => <li key={item} className="rounded-md border border-slate-200 p-3 text-sm leading-6 text-slate-700">{item}</li>)}</ul></section>
           </>
         ) : (
           <div className="mt-6 rounded-lg bg-slate-50 p-6 text-slate-600">Your access is approved. Upload a thesis to generate the analysis dashboard.</div>
