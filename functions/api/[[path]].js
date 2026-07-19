@@ -1,3 +1,5 @@
+import { processAnalysisJob } from "../lib/analysis-job.js";
+
 const CHANNELS = ["General", "Level-200 (Year 1)", "Level-300 (Year 2)", "Level-400 (Year 3)"];
 
 const CANDIDATES = [
@@ -57,6 +59,23 @@ export async function onRequest(context) {
     if (route === "auth" && request.method === "POST") return await authenticate(request, env);
     if (route === "logout" && request.method === "POST") return await logout(request, env);
     if (route === "session/role" && request.method === "PATCH") return await updateViewRole(request, env);
+    if (route === "account/password" && request.method === "PATCH") return await changePassword(request, env);
+    if (route === "admin/bootstrap" && request.method === "POST") return await bootstrapAdmin(request, env);
+    if (route === "admin/overview" && request.method === "GET") return await adminOverview(request, env);
+    if (route === "admin/users" && request.method === "GET") return await adminUsers(request, env);
+    if (route === "admin/staff-codes" && request.method === "GET") return await listStaffCodes(request, env);
+    if (route === "admin/staff-codes" && request.method === "POST") return await createStaffCode(request, env);
+    if (/^admin\/staff-codes\/[^/]+$/.test(route) && request.method === "PATCH") return await revokeStaffCode(route, request, env);
+    if (/^admin\/users\/[^/]+$/.test(route) && request.method === "PATCH") return await updateUserAdmin(route, request, env);
+    if (route === "admin/forum/settings" && request.method === "PATCH") return await updateForumSettings(request, env);
+    if (route === "admin/forum/reports" && request.method === "GET") return await listForumReports(request, env);
+    if (/^admin\/forum\/reports\/[^/]+$/.test(route) && request.method === "PATCH") return await reviewForumReport(route, request, env);
+    if (route === "admin/audit" && request.method === "GET") return await listAuditLogs(request, env);
+    if (route === "admin/analysis" && request.method === "GET") return await listAnalysisAdmin(request, env);
+
+    if (route === "notifications" && request.method === "GET") return await listNotifications(request, env);
+    if (route === "notifications/read-all" && request.method === "POST") return await readAllNotifications(request, env);
+    if (/^notifications\/[^/]+$/.test(route) && request.method === "PATCH") return await readNotification(route, request, env);
 
     if (route === "announcements" && request.method === "GET") return await listAnnouncements(env);
     if (route === "announcements" && request.method === "POST") return await createAnnouncement(request, env);
@@ -80,12 +99,15 @@ export async function onRequest(context) {
 
     if (route === "lost-found" && request.method === "GET") return await listLostFound(env);
 
-    if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "GET") return await listMessages(route, env);
+    if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "GET") return await listMessages(route, request, env);
     if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "POST") return await createMessage(route, request, env);
+    if (/^forums\/messages\/[^/]+\/report$/.test(route) && request.method === "POST") return await reportMessage(route, request, env);
 
     if (route === "thesis" && request.method === "GET") return await getThesis(request, env);
     if (route === "thesis/payment" && request.method === "POST") return await submitPayment(request, env);
-    if (route === "thesis/upload" && request.method === "POST") return await uploadThesis(request, env);
+    if (route === "thesis/upload" && request.method === "POST") return await uploadThesis(request, env, context);
+    if (/^thesis\/jobs\/[^/]+$/.test(route) && request.method === "GET") return await getAnalysisJob(route, request, env);
+    if (/^thesis\/jobs\/[^/]+\/retry$/.test(route) && request.method === "POST") return await retryAnalysisJob(route, request, env, context);
     if (route.startsWith("thesis/") && request.method === "PATCH") return await reviewPayment(route, request, env);
 
     if (route.startsWith("files/") && request.method === "GET") return await readFile(route, request, env);
@@ -155,7 +177,7 @@ async function seedData(db) {
 
   const quizCount = await count(db, "quizzes");
   if (!quizCount) {
-    await db.prepare("INSERT INTO quizzes VALUES (?, ?, ?, ?, ?)").bind(id("quiz"), "Research Methods Readiness Quiz", JSON.stringify(sampleQuestions.slice(0, 5)), 180, now()).run();
+    await db.prepare("INSERT INTO quizzes (id, title, questions_json, duration_seconds, created_at) VALUES (?, ?, ?, ?, ?)").bind(id("quiz"), "Research Methods Readiness Quiz", JSON.stringify(sampleQuestions.slice(0, 5)), 180, now()).run();
   }
 
   const itemCount = await count(db, "lost_items");
@@ -174,7 +196,7 @@ async function seedData(db) {
   const messageCount = await count(db, "messages");
   if (!messageCount) {
     for (const channel of CHANNELS) {
-      await db.prepare("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)").bind(id("msg"), channel, "system", "HICM Moderator", `Welcome to #${channel}. Keep it useful, respectful, and academic.`, now()).run();
+      await db.prepare("INSERT INTO messages (id, channel, user_id, author, body, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id("msg"), channel, "system", "HICM Moderator", `Welcome to #${channel}. Keep it useful, respectful, and academic.`, now()).run();
     }
   }
 }
@@ -187,12 +209,35 @@ async function count(db, table) {
 async function currentSession(request, env) {
   const token = cookieToken(request);
   if (!token) return null;
-  return env.DB.prepare("SELECT sessions.token, sessions.view_role, users.* FROM sessions JOIN users ON sessions.user_id = users.id WHERE sessions.token = ?").bind(token).first();
+  const session = await env.DB.prepare(`
+    SELECT sessions.token, sessions.view_role, users.*,
+      COALESCE(staff_permissions.is_admin, 0) AS is_admin,
+      COALESCE(staff_permissions.forum_access, 0) AS forum_access,
+      COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
+    FROM sessions
+    JOIN users ON sessions.user_id = users.id
+    LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
+    WHERE sessions.token = ?
+  `).bind(token).first();
+  if (session?.is_admin) session.role = "admin";
+  return session;
 }
 
 async function requireSession(request, env) {
   const session = await currentSession(request, env);
   if (!session) throw Object.assign(new Error("Please sign in to continue."), { status: 401 });
+  return session;
+}
+
+async function requireAdmin(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "admin") throw Object.assign(new Error("Administrator access is required."), { status: 403 });
+  return session;
+}
+
+async function requireStaff(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "staff" && session.role !== "admin") throw Object.assign(new Error("Staff access is required."), { status: 403 });
   return session;
 }
 
@@ -212,6 +257,8 @@ function presentSession(session) {
       position: session.position,
       matricule: session.matricule,
       phone: session.phone,
+      forumAccess: session.role === "admin" || Boolean(session.forum_access),
+      moderationAccess: session.role === "admin" || Boolean(session.moderation_access),
     },
   };
 }
@@ -236,17 +283,40 @@ async function authenticate(request, env) {
     }
   } else {
     const password = String(body.password || "");
-    user = await env.DB.prepare("SELECT * FROM users WHERE role = 'staff' AND LOWER(TRIM(name)) = LOWER(TRIM(?))").bind(name).first();
+    user = await env.DB.prepare(`
+      SELECT users.*, COALESCE(staff_permissions.is_admin, 0) AS is_admin,
+        COALESCE(staff_permissions.forum_access, 0) AS forum_access,
+        COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
+      FROM users LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
+      WHERE users.role = 'staff' AND LOWER(TRIM(users.name)) = LOWER(TRIM(?))
+    `).bind(name).first();
     if (user) {
       if (!user.password_hash || !env.PASSWORD_PEPPER || !await verifyPassword(password, user.password_salt, user.password_hash, env.PASSWORD_PEPPER)) return json({ error: "The supplied login details are not valid." }, 401);
     } else {
-      if (!env.STAFF_REGISTRATION_CODE || !safeEqual(String(body.accessCode || ""), env.STAFF_REGISTRATION_CODE)) return json({ error: "A valid staff access code is required for registration." }, 403);
+      const accessCode = String(body.accessCode || "").trim().toUpperCase();
+      const code = await env.DB.prepare("SELECT id FROM staff_access_codes WHERE code = ? AND revoked_at IS NULL AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP").bind(accessCode).first();
+      if (!code) return json({ error: "This staff access code is invalid, expired, or already used." }, 403);
       if (!body.position || password.length < 8) return json({ error: "Staff registration requires a position and password of at least 8 characters." }, 400);
       if (!env.PASSWORD_PEPPER) return json({ error: "Staff authentication is not configured." }, 503);
       const credentials = await hashPassword(password, env.PASSWORD_PEPPER);
       user = { id: id("usr"), role, name, position: String(body.position).trim(), matricule: null, phone: String(body.phone || "").trim(), created_at: now() };
-      await env.DB.prepare("INSERT INTO users (id, role, name, position, matricule, phone, created_at, password_hash, password_salt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(user.id, user.role, user.name, user.position, user.matricule, user.phone, user.created_at, credentials.hash, credentials.salt).run();
+      try {
+        await env.DB.batch([
+          env.DB.prepare(`
+            INSERT INTO users (id, role, name, position, matricule, phone, created_at, password_hash, password_salt, staff_code_id)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, id FROM staff_access_codes
+            WHERE id = ? AND revoked_at IS NULL AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+          `).bind(user.id, user.role, user.name, user.position, user.matricule, user.phone, user.created_at, credentials.hash, credentials.salt, code.id),
+          env.DB.prepare("UPDATE staff_access_codes SET used_by = ?, used_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP")
+            .bind(user.id, now(), code.id),
+          env.DB.prepare("INSERT INTO staff_permissions (user_id, updated_at) VALUES (?, ?)").bind(user.id, now()),
+          env.DB.prepare("INSERT INTO audit_logs VALUES (?, ?, 'staff.registered', 'user', ?, ?, ?)").bind(id("audit"), user.id, user.id, JSON.stringify({ codeId: code.id }), now()),
+        ]);
+      } catch (error) {
+        if (String(error.message).includes("UNIQUE")) return json({ error: "This staff access code was already used." }, 409);
+        if (String(error.message).includes("FOREIGN KEY")) return json({ error: "This staff access code is invalid, expired, or revoked." }, 403);
+        throw error;
+      }
     }
   }
 
@@ -255,6 +325,7 @@ async function authenticate(request, env) {
   const token = crypto.randomUUID();
   await env.DB.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?)").bind(token, user.id, role, now()).run();
   const session = { token, view_role: role, ...user };
+  if (user.is_admin) session.role = "admin";
   return json({ session: presentSession(session) }, 200, { "Set-Cookie": `hicm_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=2592000` });
 }
 
@@ -296,9 +367,226 @@ async function logout(request, env) {
 async function updateViewRole(request, env) {
   const session = await requireSession(request, env);
   const body = await request.json();
-  const viewRole = session.role === "staff" && body.viewRole === "staff" ? "staff" : "student";
+  const viewRole = (session.role === "staff" || session.role === "admin") && body.viewRole === "staff" ? "staff" : "student";
   await env.DB.prepare("UPDATE sessions SET view_role = ? WHERE token = ?").bind(viewRole, session.token).run();
   return getSessionResponse(request, env);
+}
+
+async function changePassword(request, env) {
+  const session = await requireStaff(request, env);
+  const body = await request.json();
+  const currentPassword = String(body.currentPassword || "");
+  const newPassword = String(body.newPassword || "");
+  if (!await verifyPassword(currentPassword, session.password_salt, session.password_hash, env.PASSWORD_PEPPER)) return json({ error: "Current password is incorrect." }, 401);
+  if (newPassword.length < 12) return json({ error: "New password must contain at least 12 characters." }, 400);
+  if (currentPassword === newPassword) return json({ error: "Choose a different password." }, 400);
+  const credentials = await hashPassword(newPassword, env.PASSWORD_PEPPER);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?").bind(credentials.hash, credentials.salt, session.id),
+    env.DB.prepare("DELETE FROM sessions WHERE user_id = ? AND token <> ?").bind(session.id, session.token),
+    env.DB.prepare("INSERT INTO audit_logs VALUES (?, ?, 'account.password_changed', 'user', ?, '{}', ?)").bind(id("audit"), session.id, session.id, now()),
+  ]);
+  return json({ ok: true });
+}
+
+async function bootstrapAdmin(request, env) {
+  const existing = await env.DB.prepare("SELECT COUNT(*) AS total FROM staff_permissions WHERE is_admin = 1").first();
+  if (Number(existing.total) > 0) return json({ error: "Administrator bootstrap is closed." }, 409);
+  const body = await request.json();
+  if (!env.ADMIN_BOOTSTRAP_SECRET || !safeEqual(String(body.bootstrapSecret || ""), env.ADMIN_BOOTSTRAP_SECRET)) return json({ error: "Bootstrap credential is invalid." }, 403);
+  const name = String(body.name || "HICM Administrator").trim();
+  const password = String(body.password || "");
+  if (password.length < 12) return json({ error: "The administrator password must contain at least 12 characters." }, 400);
+  if (!env.PASSWORD_PEPPER) return json({ error: "Staff authentication is not configured." }, 503);
+
+  const userId = id("usr");
+  const codeId = id("code");
+  const timestamp = now();
+  const credentials = await hashPassword(password, env.PASSWORD_PEPPER);
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO staff_access_codes (id, code, expires_at, created_at) VALUES (?, ?, ?, ?)")
+      .bind(codeId, `BOOTSTRAP-${crypto.randomUUID()}`, new Date(Date.now() + 60000).toISOString(), timestamp),
+    env.DB.prepare("INSERT INTO users (id, role, name, position, matricule, phone, created_at, password_hash, password_salt, staff_code_id) VALUES (?, 'staff', ?, 'Platform Administrator', NULL, ?, ?, ?, ?, ?)")
+      .bind(userId, name, String(body.phone || "Not supplied"), timestamp, credentials.hash, credentials.salt, codeId),
+    env.DB.prepare("UPDATE staff_access_codes SET used_by = ?, used_at = ? WHERE id = ?").bind(userId, timestamp, codeId),
+    env.DB.prepare("INSERT INTO staff_permissions (user_id, is_admin, forum_access, moderation_access, updated_by, updated_at) VALUES (?, 1, 1, 1, ?, ?)")
+      .bind(userId, userId, timestamp),
+    env.DB.prepare("INSERT INTO audit_logs VALUES (?, ?, 'admin.bootstrapped', 'user', ?, ?, ?)")
+      .bind(id("audit"), userId, userId, JSON.stringify({ name }), timestamp),
+  ]);
+  return json({ ok: true, name });
+}
+
+async function adminOverview(request, env) {
+  await requireAdmin(request, env);
+  const [users, students, staff, openComplaints, pendingPayments, queuedAnalysis, unreadReports] = await Promise.all([
+    count(env.DB, "users"),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM users WHERE role = 'student'").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM users WHERE role = 'staff'").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM complaints WHERE status <> 'Resolved'").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM thesis_requests WHERE status = 'pending'").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM analysis_jobs WHERE status IN ('queued', 'processing', 'failed')").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM forum_reports WHERE status = 'open'").first(),
+  ]);
+  return json({ metrics: { users, students: students.total, staff: staff.total, openComplaints: openComplaints.total, pendingPayments: pendingPayments.total, queuedAnalysis: queuedAnalysis.total, openForumReports: unreadReports.total } });
+}
+
+async function adminUsers(request, env) {
+  await requireAdmin(request, env);
+  const rows = await env.DB.prepare(`
+    SELECT users.id, users.name, users.role, users.position, users.matricule, users.phone, users.account_status, users.created_at,
+      COALESCE(staff_permissions.is_admin, 0) AS is_admin,
+      COALESCE(staff_permissions.forum_access, 0) AS forum_access,
+      COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
+    FROM users LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
+    ORDER BY users.created_at DESC LIMIT 250
+  `).all();
+  return json({ users: rows.results });
+}
+
+async function listStaffCodes(request, env) {
+  await requireAdmin(request, env);
+  const rows = await env.DB.prepare(`
+    SELECT codes.*, creator.name AS creator_name, consumer.name AS used_by_name
+    FROM staff_access_codes codes
+    LEFT JOIN users creator ON creator.id = codes.created_by
+    LEFT JOIN users consumer ON consumer.id = codes.used_by
+    ORDER BY codes.created_at DESC LIMIT 100
+  `).all();
+  return json({ codes: rows.results });
+}
+
+async function createStaffCode(request, env) {
+  const session = await requireAdmin(request, env);
+  const body = await request.json();
+  const hours = Math.min(168, Math.max(1, Number(body.expiresInHours) || 24));
+  const code = generateStaffCode();
+  const codeId = id("code");
+  await env.DB.prepare("INSERT INTO staff_access_codes (id, code, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(codeId, code, session.id, new Date(Date.now() + hours * 3600000).toISOString(), now()).run();
+  await audit(env, session.id, "staff_code.created", "staff_access_code", codeId, { hours });
+  return json({ code, id: codeId, expiresInHours: hours }, 201);
+}
+
+async function revokeStaffCode(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const codeId = route.split("/")[2];
+  await env.DB.prepare("UPDATE staff_access_codes SET revoked_at = ? WHERE id = ? AND used_at IS NULL").bind(now(), codeId).run();
+  await audit(env, session.id, "staff_code.revoked", "staff_access_code", codeId);
+  return listStaffCodes(request, env);
+}
+
+async function updateUserAdmin(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const userId = route.split("/")[2];
+  const body = await request.json();
+  const target = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first();
+  if (!target) return json({ error: "User not found." }, 404);
+  if (target.id === session.id && body.accountStatus === "blocked") return json({ error: "You cannot block your own administrator account." }, 400);
+  const status = body.accountStatus === "blocked" ? "blocked" : "active";
+  await env.DB.batch([
+    env.DB.prepare("UPDATE users SET account_status = ? WHERE id = ?").bind(status, userId),
+    ...(status === "blocked" ? [env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId)] : []),
+  ]);
+  if (target.role === "staff") {
+    await env.DB.prepare(`
+      INSERT INTO staff_permissions (user_id, is_admin, forum_access, moderation_access, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET forum_access = excluded.forum_access, moderation_access = excluded.moderation_access, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+    `).bind(userId, 0, body.forumAccess ? 1 : 0, body.moderationAccess ? 1 : 0, session.id, now()).run();
+  }
+  await audit(env, session.id, "user.permissions_updated", "user", userId, { status, forumAccess: Boolean(body.forumAccess), moderationAccess: Boolean(body.moderationAccess) });
+  return adminUsers(request, env);
+}
+
+async function updateForumSettings(request, env) {
+  const session = await requireAdmin(request, env);
+  const body = await request.json();
+  const channel = CHANNELS.includes(body.channel) ? body.channel : "General";
+  await env.DB.prepare(`
+    INSERT INTO forum_settings (channel, links_enabled, images_enabled, audio_enabled, updated_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(channel) DO UPDATE SET links_enabled = excluded.links_enabled, images_enabled = excluded.images_enabled, audio_enabled = excluded.audio_enabled, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+  `).bind(channel, body.linksEnabled ? 1 : 0, body.imagesEnabled ? 1 : 0, body.audioEnabled ? 1 : 0, session.id, now()).run();
+  await audit(env, session.id, "forum.settings_updated", "forum_channel", channel, body);
+  return json({ ok: true });
+}
+
+async function listForumReports(request, env) {
+  await requireAdmin(request, env);
+  const rows = await env.DB.prepare(`
+    SELECT forum_reports.*, messages.body, messages.author, users.name AS reporter_name
+    FROM forum_reports JOIN messages ON messages.id = forum_reports.message_id
+    JOIN users ON users.id = forum_reports.reporter_id
+    ORDER BY forum_reports.created_at DESC LIMIT 100
+  `).all();
+  return json({ reports: rows.results });
+}
+
+async function reviewForumReport(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const reportId = route.split("/")[3];
+  const body = await request.json();
+  const status = body.status === "actioned" ? "actioned" : "dismissed";
+  const report = await env.DB.prepare("SELECT message_id FROM forum_reports WHERE id = ?").bind(reportId).first();
+  if (!report) return json({ error: "Report not found." }, 404);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE forum_reports SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?").bind(status, session.id, now(), reportId),
+    ...(status === "actioned" ? [env.DB.prepare("UPDATE messages SET deleted_at = ? WHERE id = ?").bind(now(), report.message_id)] : []),
+  ]);
+  await audit(env, session.id, "forum.report_reviewed", "forum_report", reportId, { status });
+  return listForumReports(request, env);
+}
+
+async function listAuditLogs(request, env) {
+  await requireAdmin(request, env);
+  const rows = await env.DB.prepare("SELECT audit_logs.*, users.name AS actor_name FROM audit_logs LEFT JOIN users ON users.id = audit_logs.actor_id ORDER BY audit_logs.created_at DESC LIMIT 200").all();
+  return json({ logs: rows.results });
+}
+
+async function listAnalysisAdmin(request, env) {
+  await requireAdmin(request, env);
+  const rows = await env.DB.prepare(`
+    SELECT analysis_jobs.*, analysis_documents.original_name, users.name AS student_name, users.matricule,
+      analysis_reports.similarity_percent, analysis_reports.matched_shingles, analysis_reports.total_shingles
+    FROM analysis_jobs JOIN analysis_documents ON analysis_documents.id = analysis_jobs.document_id
+    JOIN users ON users.id = analysis_jobs.user_id
+    LEFT JOIN analysis_reports ON analysis_reports.job_id = analysis_jobs.id
+    ORDER BY analysis_jobs.created_at DESC LIMIT 100
+  `).all();
+  return json({ jobs: rows.results });
+}
+
+async function listNotifications(request, env) {
+  const session = await requireSession(request, env);
+  const rows = await env.DB.prepare("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 100").bind(session.id).all();
+  const unread = rows.results.filter((item) => !item.read_at).length;
+  return json({ notifications: rows.results, unread });
+}
+
+async function readNotification(route, request, env) {
+  const session = await requireSession(request, env);
+  const notificationId = route.split("/")[1];
+  await env.DB.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE id = ? AND user_id = ?").bind(now(), notificationId, session.id).run();
+  return listNotifications(request, env);
+}
+
+async function readAllNotifications(request, env) {
+  const session = await requireSession(request, env);
+  await env.DB.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE user_id = ?").bind(now(), session.id).run();
+  return listNotifications(request, env);
+}
+
+async function notify(env, userId, type, title, body, deepLink) {
+  await env.DB.prepare("INSERT INTO notifications (id, user_id, type, title, body, deep_link, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(id("notification"), userId, type, title, body, deepLink || null, now()).run();
+}
+
+function generateStaffCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const value = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+  return `STF-${value.slice(0, 4)}-${value.slice(4)}`;
 }
 
 async function listAnnouncements(env) {
@@ -312,6 +600,9 @@ async function createAnnouncement(request, env) {
   const body = await request.json();
   if (!body.title || !body.body) return json({ error: "Title and announcement body are required." }, 400);
   await env.DB.prepare("INSERT INTO announcements VALUES (?, ?, ?, ?, ?)").bind(id("ann"), body.title, body.body, session.name, now()).run();
+  const students = await env.DB.prepare("SELECT id FROM users WHERE role = 'student' AND account_status = 'active'").all();
+  if (students.results.length) await env.DB.batch(students.results.map((student) => env.DB.prepare("INSERT INTO notifications (id, user_id, type, title, body, deep_link, created_at) VALUES (?, ?, 'announcement', ?, ?, '/announcements', ?)").bind(id("notification"), student.id, String(body.title).slice(0, 120), String(body.body).slice(0, 240), now())));
+  await audit(env, session.id, "announcement.created", "announcement", null, { title: body.title });
   return listAnnouncements(env);
 }
 
@@ -343,6 +634,9 @@ async function updateComplaint(route, request, env) {
   const body = await request.json();
   const status = ["Pending", "Reviewing", "Resolved"].includes(body.status) ? body.status : "Pending";
   await env.DB.prepare("UPDATE complaints SET status = ? WHERE id = ?").bind(status, complaintId).run();
+  const complaint = await env.DB.prepare("SELECT user_id, category FROM complaints WHERE id = ?").bind(complaintId).first();
+  if (complaint) await notify(env, complaint.user_id, "complaint", "Complaint status updated", `${complaint.category} is now ${status}.`, "/complaints");
+  await audit(env, session.id, "complaint.status_updated", "complaint", complaintId, { status });
   return listComplaints(request, env);
 }
 
@@ -551,20 +845,62 @@ async function listLostFound(env) {
   return json({ items: rows.results });
 }
 
-async function listMessages(route, env) {
+async function listMessages(route, request, env) {
   const channel = decodeURIComponent(route.split("/")[1]);
-  const rows = await env.DB.prepare("SELECT * FROM messages WHERE channel = ? ORDER BY created_at ASC LIMIT 100").bind(channel).all();
-  return json({ channel, messages: rows.results });
+  if (!CHANNELS.includes(channel)) return json({ error: "Forum channel not found." }, 404);
+  const session = await currentSession(request, env);
+  if (session?.role === "staff" && !session.forum_access) return json({ error: "An administrator must grant this staff account forum access." }, 403);
+  const after = new URL(request.url).searchParams.get("after");
+  const rows = after
+    ? await env.DB.prepare(`
+        SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body
+        FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id
+        WHERE messages.channel = ? AND messages.created_at > ? AND messages.deleted_at IS NULL
+        ORDER BY messages.created_at ASC LIMIT 100
+      `).bind(channel, after).all()
+    : await env.DB.prepare(`
+        SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body
+        FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id
+        WHERE messages.channel = ? AND messages.deleted_at IS NULL
+        ORDER BY messages.created_at DESC LIMIT 100
+      `).bind(channel).all();
+  const messages = after ? rows.results : rows.results.reverse();
+  const settings = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = ?").bind(channel).first();
+  return json({ channel, messages, settings: settings || { links_enabled: 0, images_enabled: 0, audio_enabled: 0 } });
 }
 
 async function createMessage(route, request, env) {
   const session = await requireSession(request, env);
   const channel = decodeURIComponent(route.split("/")[1]);
+  if (!CHANNELS.includes(channel)) return json({ error: "Forum channel not found." }, 404);
+  if (session.role === "staff" && !session.forum_access) return json({ error: "An administrator must grant this staff account forum access." }, 403);
   const body = await request.json();
   if (!body.body) return json({ error: "Message cannot be empty." }, 400);
-  if (containsLink(body.body)) return json({ error: "Links are not allowed in the General Forum." }, 400);
-  await env.DB.prepare("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)").bind(id("msg"), channel, session.id, session.name, body.body, now()).run();
-  return listMessages(route, env);
+  const settings = await env.DB.prepare("SELECT links_enabled FROM forum_settings WHERE channel = ?").bind(channel).first();
+  if (!settings?.links_enabled && containsLink(body.body)) return json({ error: "Links are disabled in this forum channel." }, 400);
+  let parent = null;
+  if (body.parentMessageId) parent = await env.DB.prepare("SELECT id, user_id, channel FROM messages WHERE id = ? AND deleted_at IS NULL").bind(body.parentMessageId).first();
+  if (body.parentMessageId && (!parent || parent.channel !== channel)) return json({ error: "The reply target is not available." }, 400);
+  const messageId = id("msg");
+  await env.DB.prepare("INSERT INTO messages (id, channel, user_id, author, body, created_at, parent_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(messageId, channel, session.id, session.name, String(body.body).trim().slice(0, 1000), now(), parent?.id || null).run();
+  if (parent && parent.user_id !== session.id && parent.user_id !== "system") await notify(env, parent.user_id, "forum_reply", `${session.name} replied to you`, String(body.body).trim().slice(0, 180), "/forums");
+  return listMessages(route, request, env);
+}
+
+async function reportMessage(route, request, env) {
+  const session = await requireSession(request, env);
+  const messageId = route.split("/")[2];
+  const body = await request.json();
+  const message = await env.DB.prepare("SELECT id FROM messages WHERE id = ? AND deleted_at IS NULL").bind(messageId).first();
+  if (!message) return json({ error: "Message not found." }, 404);
+  try {
+    await env.DB.prepare("INSERT INTO forum_reports (id, message_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(id("report"), messageId, session.id, String(body.reason || "Inappropriate content").slice(0, 240), now()).run();
+  } catch {
+    return json({ error: "You already reported this message." }, 409);
+  }
+  return json({ ok: true }, 201);
 }
 
 function containsLink(value) {
@@ -573,12 +909,19 @@ function containsLink(value) {
 
 async function getThesis(request, env) {
   const session = await requireSession(request, env);
-  if (session.role === "staff" || session.role === "admin") {
+  if (session.role === "admin") {
     const rows = await env.DB.prepare("SELECT * FROM thesis_requests ORDER BY updated_at DESC").all();
     return json({ requests: rows.results.map(presentThesis) });
   }
+  if (session.role === "staff") return json({ error: "Administrator approval is required for payment records." }, 403);
   const row = await env.DB.prepare("SELECT * FROM thesis_requests WHERE user_id = ?").bind(session.id).first();
-  return json({ request: row ? presentThesis(row) : null });
+  if (!row) return json({ request: null });
+  const requestView = presentThesis(row);
+  if (row.analysis_job_id) {
+    requestView.analysisJob = await readAnalysisJob(env, row.analysis_job_id);
+    if (requestView.analysisJob?.report) requestView.analysis = requestView.analysisJob.report;
+  }
+  return json({ request: requestView });
 }
 
 function presentThesis(row) {
@@ -600,40 +943,110 @@ async function submitPayment(request, env) {
   if (existing) {
     await env.DB.prepare("UPDATE thesis_requests SET status = 'pending', screenshot_key = ?, updated_at = ? WHERE user_id = ?").bind(key, now(), session.id).run();
   } else {
-    await env.DB.prepare("INSERT INTO thesis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id("thr"), session.id, session.name, session.matricule, "pending", key, null, null, now(), now()).run();
+    await env.DB.prepare("INSERT INTO thesis_requests (id, user_id, student_name, matricule, status, screenshot_key, thesis_key, analysis_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id("thr"), session.id, session.name, session.matricule, "pending", key, null, null, now(), now()).run();
   }
   return getThesis(request, env);
 }
 
 async function reviewPayment(route, request, env) {
-  const session = await requireSession(request, env);
-  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
+  const session = await requireAdmin(request, env);
   const requestId = route.split("/")[1];
   const body = await request.json();
   const status = body.status === "approved" ? "approved" : "rejected";
   await env.DB.prepare("UPDATE thesis_requests SET status = ?, updated_at = ? WHERE id = ?").bind(status, now(), requestId).run();
+  const thesisRequest = await env.DB.prepare("SELECT user_id FROM thesis_requests WHERE id = ?").bind(requestId).first();
+  if (thesisRequest) await notify(env, thesisRequest.user_id, "payment_review", status === "approved" ? "Thesis analysis unlocked" : "Payment screenshot needs attention", status === "approved" ? "Your payment was approved. You can now upload your thesis." : "Your screenshot was rejected. Please submit a clearer image.", "/thesis");
+  await audit(env, session.id, `thesis.payment_${status}`, "thesis_request", requestId);
   return getThesis(request, env);
 }
 
-async function uploadThesis(request, env) {
+async function uploadThesis(request, env, context) {
   const session = await requireSession(request, env);
   const row = await env.DB.prepare("SELECT * FROM thesis_requests WHERE user_id = ? AND status = 'approved'").bind(session.id).first();
   if (!row) return json({ error: "Thesis tool is locked until admin approval." }, 403);
   const form = await request.formData();
   const thesis = form.get("thesis");
   if (!thesis || !thesis.name) return json({ error: "Please upload a thesis file." }, 400);
+  const validationError = await validateDocument(thesis, 20 * 1024 * 1024);
+  if (validationError) return json({ error: validationError }, 400);
   const key = await storeUpload(env, thesis, "thesis-files");
-  const analysis = {
-    similarity: 0,
-    coverage: "This report currently compares exact text only against documents stored and authorized inside HICM Portal. It is not Turnitin and does not search subscription academic databases.",
-    excerpts: [
-      "No deterministic internal-text match was recorded for this upload.",
-      "Review quotations, paraphrases, and bibliography entries manually before final submission.",
-      "Writing recommendations are advisory and do not establish authorship or academic misconduct.",
-    ],
-  };
-  await env.DB.prepare("UPDATE thesis_requests SET thesis_key = ?, analysis_json = ?, updated_at = ? WHERE user_id = ?").bind(key, JSON.stringify(analysis), now(), session.id).run();
+  const documentId = id("document");
+  const jobId = id("analysis");
+  const timestamp = now();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO analysis_documents (id, user_id, thesis_request_id, object_key, original_name, mime_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind(documentId, session.id, row.id, key, thesis.name, thesis.type || "application/octet-stream", timestamp),
+    env.DB.prepare("INSERT INTO analysis_jobs (id, document_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(jobId, documentId, session.id, timestamp, timestamp),
+    env.DB.prepare("UPDATE thesis_requests SET thesis_key = ?, analysis_job_id = ?, analysis_json = NULL, updated_at = ? WHERE user_id = ?")
+      .bind(key, jobId, timestamp, session.id),
+    env.DB.prepare("INSERT INTO analysis_access_logs (id, user_id, job_id, action, created_at) VALUES (?, ?, ?, 'analysis.uploaded', ?)")
+      .bind(id("access"), session.id, jobId, timestamp),
+  ]);
+  if (env.ANALYSIS_QUEUE) await env.ANALYSIS_QUEUE.send({ jobId });
+  else context?.waitUntil(processAnalysisJob(env, jobId).catch(() => {}));
   return getThesis(request, env);
+}
+
+async function getAnalysisJob(route, request, env) {
+  const session = await requireSession(request, env);
+  const jobId = route.split("/")[2];
+  const job = await env.DB.prepare("SELECT user_id FROM analysis_jobs WHERE id = ?").bind(jobId).first();
+  if (!job) return json({ error: "Analysis job not found." }, 404);
+  if (session.role !== "admin" && session.role !== "staff" && job.user_id !== session.id) return json({ error: "You cannot access this report." }, 403);
+  await env.DB.prepare("INSERT INTO analysis_access_logs (id, user_id, job_id, action, created_at) VALUES (?, ?, ?, 'analysis.viewed', ?)").bind(id("access"), session.id, jobId, now()).run();
+  return json({ job: await readAnalysisJob(env, jobId) });
+}
+
+async function retryAnalysisJob(route, request, env, context) {
+  const session = await requireSession(request, env);
+  const jobId = route.split("/")[2];
+  const job = await env.DB.prepare("SELECT user_id, status, attempts FROM analysis_jobs WHERE id = ?").bind(jobId).first();
+  if (!job) return json({ error: "Analysis job not found." }, 404);
+  if (session.role !== "admin" && job.user_id !== session.id) return json({ error: "You cannot retry this report." }, 403);
+  if (job.status !== "failed") return json({ error: "Only failed jobs can be retried." }, 409);
+  if (job.attempts >= 4) return json({ error: "Retry limit reached. Contact an administrator." }, 409);
+  await env.DB.prepare("UPDATE analysis_jobs SET status = 'queued', progress = 0, error_message = NULL, updated_at = ? WHERE id = ?").bind(now(), jobId).run();
+  if (env.ANALYSIS_QUEUE) await env.ANALYSIS_QUEUE.send({ jobId });
+  else context.waitUntil(processAnalysisJob(env, jobId).catch(() => {}));
+  return json({ job: await readAnalysisJob(env, jobId) });
+}
+
+async function readAnalysisJob(env, jobId) {
+  const job = await env.DB.prepare(`
+    SELECT analysis_jobs.*, analysis_documents.original_name, analysis_documents.word_count,
+      analysis_reports.similarity_percent, analysis_reports.matched_shingles, analysis_reports.total_shingles,
+      analysis_reports.coverage_note, analysis_reports.recommendations_json
+    FROM analysis_jobs JOIN analysis_documents ON analysis_documents.id = analysis_jobs.document_id
+    LEFT JOIN analysis_reports ON analysis_reports.job_id = analysis_jobs.id
+    WHERE analysis_jobs.id = ?
+  `).bind(jobId).first();
+  if (!job) return null;
+  const matches = job.status === "completed"
+    ? await env.DB.prepare(`
+        SELECT analysis_matches.*, analysis_documents.original_name AS source_name
+        FROM analysis_matches JOIN analysis_documents ON analysis_documents.id = analysis_matches.source_document_id
+        WHERE analysis_matches.job_id = ? ORDER BY analysis_matches.similarity_percent DESC LIMIT 20
+      `).bind(jobId).all()
+    : { results: [] };
+  return {
+    id: job.id,
+    status: job.status,
+    progress: job.progress,
+    attempts: job.attempts,
+    error: job.error_message,
+    originalName: job.original_name,
+    wordCount: job.word_count,
+    createdAt: job.created_at,
+    report: job.status === "completed" ? {
+      similarity: job.similarity_percent,
+      matchedShingles: job.matched_shingles,
+      totalShingles: job.total_shingles,
+      coverage: job.coverage_note,
+      recommendations: JSON.parse(job.recommendations_json || "[]"),
+      matches: matches.results.map((match) => ({ sourceName: match.source_name, similarity: match.similarity_percent, excerpt: match.excerpt })),
+    } : null,
+  };
 }
 
 async function readFile(route, request, env) {
