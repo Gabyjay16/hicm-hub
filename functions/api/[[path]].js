@@ -53,48 +53,63 @@ export async function onRequest(context) {
     await ensureSchema(env.DB);
     await seedData(env.DB);
 
-    if (route === "session" && request.method === "GET") return getSessionResponse(request, env);
-    if (route === "auth" && request.method === "POST") return authenticate(request, env);
-    if (route === "logout" && request.method === "POST") return logout();
-    if (route === "session/role" && request.method === "PATCH") return updateViewRole(request, env);
+    if (route === "session" && request.method === "GET") return await getSessionResponse(request, env);
+    if (route === "auth" && request.method === "POST") return await authenticate(request, env);
+    if (route === "logout" && request.method === "POST") return await logout(request, env);
+    if (route === "session/role" && request.method === "PATCH") return await updateViewRole(request, env);
 
-    if (route === "announcements" && request.method === "GET") return listAnnouncements(env);
-    if (route === "announcements" && request.method === "POST") return createAnnouncement(request, env);
+    if (route === "announcements" && request.method === "GET") return await listAnnouncements(env);
+    if (route === "announcements" && request.method === "POST") return await createAnnouncement(request, env);
 
-    if (route === "complaints" && request.method === "GET") return listComplaints(request, env);
-    if (route === "complaints" && request.method === "POST") return createComplaint(request, env);
-    if (route.startsWith("complaints/") && request.method === "PATCH") return updateComplaint(route, request, env);
+    if (route === "complaints" && request.method === "GET") return await listComplaints(request, env);
+    if (route === "complaints" && request.method === "POST") return await createComplaint(request, env);
+    if (route.startsWith("complaints/") && request.method === "PATCH") return await updateComplaint(route, request, env);
 
-    if (route === "quizzes" && request.method === "GET") return listQuizzes(env);
-    if (route === "quizzes/generate" && request.method === "POST") return generateQuiz(request, env);
-    if (route.startsWith("quizzes/") && route.endsWith("/submit") && request.method === "POST") return submitQuiz(route, request, env);
+    if (route === "quizzes" && request.method === "GET") return await listQuizzes(request, env);
+    if (route === "ai/ping" && request.method === "GET") return await pingGroq(request, env);
+    if (route === "ai/evaluations/generate" && request.method === "POST") return await generateQuiz(request, env);
+    if (route === "quizzes/generate" && request.method === "POST") return await generateQuiz(request, env);
+    if (/^quizzes\/[^/]+$/.test(route) && request.method === "PATCH") return await updateQuiz(route, request, env);
+    if (route.startsWith("quizzes/") && route.endsWith("/submit") && request.method === "POST") return await submitQuiz(route, request, env);
 
-    if (route === "votes" && request.method === "GET") return listVotes(request, env);
-    if (route === "votes" && request.method === "POST") return castVote(request, env);
+    if (route === "notes" && request.method === "GET") return await listNotes(request, env);
+    if (route === "notes" && request.method === "POST") return await publishNote(request, env);
 
-    if (route === "lost-found" && request.method === "GET") return listLostFound(env);
+    if (route === "votes" && request.method === "GET") return await listVotes(request, env);
+    if (route === "votes" && request.method === "POST") return await castVote(request, env);
 
-    if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "GET") return listMessages(route, env);
-    if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "POST") return createMessage(route, request, env);
+    if (route === "lost-found" && request.method === "GET") return await listLostFound(env);
 
-    if (route === "thesis" && request.method === "GET") return getThesis(request, env);
-    if (route === "thesis/payment" && request.method === "POST") return submitPayment(request, env);
-    if (route === "thesis/upload" && request.method === "POST") return uploadThesis(request, env);
-    if (route.startsWith("thesis/") && request.method === "PATCH") return reviewPayment(route, request, env);
+    if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "GET") return await listMessages(route, env);
+    if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "POST") return await createMessage(route, request, env);
 
-    if (route.startsWith("files/") && request.method === "GET") return readFile(route, env);
+    if (route === "thesis" && request.method === "GET") return await getThesis(request, env);
+    if (route === "thesis/payment" && request.method === "POST") return await submitPayment(request, env);
+    if (route === "thesis/upload" && request.method === "POST") return await uploadThesis(request, env);
+    if (route.startsWith("thesis/") && request.method === "PATCH") return await reviewPayment(route, request, env);
+
+    if (route.startsWith("files/") && request.method === "GET") return await readFile(route, request, env);
 
     return json({ error: "Route not found." }, 404);
   } catch (error) {
-    return json({ error: error.message || "Unexpected server error." }, 500);
+    return json({ error: error.message || "Unexpected server error." }, error.status || 500);
   }
 }
 
 function json(payload, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...corsHeaders(), ...extraHeaders },
+    headers: { "Content-Type": "application/json", ...securityHeaders(), ...corsHeaders(), ...extraHeaders },
   });
+}
+
+function securityHeaders() {
+  return {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), geolocation=(), microphone=()",
+  };
 }
 
 function corsHeaders() {
@@ -127,6 +142,8 @@ async function ensureSchema(db) {
     CREATE TABLE IF NOT EXISTS lost_items (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, location TEXT NOT NULL, contact TEXT NOT NULL, image_url TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, channel TEXT NOT NULL, user_id TEXT NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS thesis_requests (id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE, student_name TEXT NOT NULL, matricule TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'locked', screenshot_key TEXT, thesis_key TEXT, analysis_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS lecture_notes (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, course_code TEXT NOT NULL, course_title TEXT NOT NULL, department TEXT NOT NULL, level TEXT NOT NULL, semester TEXT NOT NULL, academic_year TEXT NOT NULL, lecturer_name TEXT NOT NULL, object_key TEXT NOT NULL UNIQUE, original_name TEXT NOT NULL, mime_type TEXT NOT NULL, file_size INTEGER NOT NULL, published INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, actor_id TEXT, action TEXT NOT NULL, target_type TEXT, target_id TEXT, metadata_json TEXT, created_at TEXT NOT NULL);
   `);
 }
 
@@ -175,7 +192,7 @@ async function currentSession(request, env) {
 
 async function requireSession(request, env) {
   const session = await currentSession(request, env);
-  if (!session) throw new Error("Please sign in to continue.");
+  if (!session) throw Object.assign(new Error("Please sign in to continue."), { status: 401 });
   return session;
 }
 
@@ -202,21 +219,38 @@ function presentSession(session) {
 async function authenticate(request, env) {
   const body = await request.json();
   const role = body.role === "staff" ? "staff" : "student";
-  if (!body.name || !body.phone) return json({ error: "Name and phone number are required." }, 400);
-  if (role === "student" && !body.matricule) return json({ error: "Matricule is required for students." }, 400);
-  if (role === "staff" && !body.position) return json({ error: "Position is required for staff." }, 400);
+  const name = String(body.name || "").trim();
+  if (!name) return json({ error: "Enter your full name and credential." }, 400);
+  let user;
 
-  let user = role === "student"
-    ? await env.DB.prepare("SELECT * FROM users WHERE matricule = ?").bind(body.matricule).first()
-    : await env.DB.prepare("SELECT * FROM users WHERE phone = ? AND role = 'staff'").bind(body.phone).first();
-
-  if (!user) {
-    user = { id: id("usr"), role, name: body.name, position: body.position || null, matricule: body.matricule || null, phone: body.phone, created_at: now() };
-    await env.DB.prepare("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)").bind(user.id, user.role, user.name, user.position, user.matricule, user.phone, user.created_at).run();
+  if (role === "student") {
+    const matricule = String(body.matricule || "").trim().toUpperCase();
+    if (!matricule) return json({ error: "Enter your full name and credential." }, 400);
+    user = await env.DB.prepare("SELECT * FROM users WHERE UPPER(matricule) = ? AND role = 'student'").bind(matricule).first();
+    if (user && user.name.trim().toLowerCase() !== name.toLowerCase()) return json({ error: "The supplied login details are not valid." }, 401);
+    if (!user) {
+      const phone = String(body.phone || "").trim();
+      if (!phone) return json({ error: "Phone number is required for student registration." }, 400);
+      user = { id: id("usr"), role, name, position: null, matricule, phone, created_at: now() };
+      await env.DB.prepare("INSERT INTO users (id, role, name, position, matricule, phone, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(user.id, user.role, user.name, user.position, user.matricule, user.phone, user.created_at).run();
+    }
   } else {
-    await env.DB.prepare("UPDATE users SET name = ?, position = ?, phone = ? WHERE id = ?").bind(body.name, body.position || user.position, body.phone, user.id).run();
-    user = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(user.id).first();
+    const password = String(body.password || "");
+    user = await env.DB.prepare("SELECT * FROM users WHERE role = 'staff' AND LOWER(TRIM(name)) = LOWER(TRIM(?))").bind(name).first();
+    if (user) {
+      if (!user.password_hash || !env.PASSWORD_PEPPER || !await verifyPassword(password, user.password_salt, user.password_hash, env.PASSWORD_PEPPER)) return json({ error: "The supplied login details are not valid." }, 401);
+    } else {
+      if (!env.STAFF_REGISTRATION_CODE || !safeEqual(String(body.accessCode || ""), env.STAFF_REGISTRATION_CODE)) return json({ error: "A valid staff access code is required for registration." }, 403);
+      if (!body.position || password.length < 8) return json({ error: "Staff registration requires a position and password of at least 8 characters." }, 400);
+      if (!env.PASSWORD_PEPPER) return json({ error: "Staff authentication is not configured." }, 503);
+      const credentials = await hashPassword(password, env.PASSWORD_PEPPER);
+      user = { id: id("usr"), role, name, position: String(body.position).trim(), matricule: null, phone: String(body.phone || "").trim(), created_at: now() };
+      await env.DB.prepare("INSERT INTO users (id, role, name, position, matricule, phone, created_at, password_hash, password_salt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(user.id, user.role, user.name, user.position, user.matricule, user.phone, user.created_at, credentials.hash, credentials.salt).run();
+    }
   }
+
+  if (user.account_status === "blocked") return json({ error: "The supplied login details are not valid." }, 401);
 
   const token = crypto.randomUUID();
   await env.DB.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?)").bind(token, user.id, role, now()).run();
@@ -224,14 +258,45 @@ async function authenticate(request, env) {
   return json({ session: presentSession(session) }, 200, { "Set-Cookie": `hicm_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=2592000` });
 }
 
-function logout() {
+async function hashPassword(password, pepper) {
+  const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+  const salt = bytesToHex(saltBytes);
+  return { salt, hash: await passwordMac(password, salt, pepper) };
+}
+
+async function verifyPassword(password, salt, expectedHash, pepper) {
+  if (!password || !salt || !expectedHash || !pepper) return false;
+  return safeEqual(await passwordMac(password, salt, pepper), expectedHash);
+}
+
+async function passwordMac(password, salt, pepper) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(pepper), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(`${salt}:${password}`));
+  return bytesToHex(new Uint8Array(signature));
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function safeEqual(left, right) {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
+}
+
+async function logout(request, env) {
+  const token = cookieToken(request);
+  if (token) await env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
   return json({ ok: true }, 200, { "Set-Cookie": "hicm_session=; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=0" });
 }
 
 async function updateViewRole(request, env) {
   const session = await requireSession(request, env);
   const body = await request.json();
-  const viewRole = body.viewRole === "staff" ? "staff" : "student";
+  const viewRole = session.role === "staff" && body.viewRole === "staff" ? "staff" : "student";
   await env.DB.prepare("UPDATE sessions SET view_role = ? WHERE token = ?").bind(viewRole, session.token).run();
   return getSessionResponse(request, env);
 }
@@ -243,7 +308,7 @@ async function listAnnouncements(env) {
 
 async function createAnnouncement(request, env) {
   const session = await requireSession(request, env);
-  if (session.view_role !== "staff") return json({ error: "Staff view is required." }, 403);
+  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
   const body = await request.json();
   if (!body.title || !body.body) return json({ error: "Title and announcement body are required." }, 400);
   await env.DB.prepare("INSERT INTO announcements VALUES (?, ?, ?, ?, ?)").bind(id("ann"), body.title, body.body, session.name, now()).run();
@@ -252,7 +317,7 @@ async function createAnnouncement(request, env) {
 
 async function listComplaints(request, env) {
   const session = await requireSession(request, env);
-  const query = session.view_role === "staff"
+  const query = session.role === "staff" || session.role === "admin"
     ? env.DB.prepare("SELECT * FROM complaints ORDER BY created_at DESC")
     : env.DB.prepare("SELECT * FROM complaints WHERE user_id = ? ORDER BY created_at DESC").bind(session.id);
   const rows = await query.all();
@@ -273,7 +338,7 @@ async function createComplaint(request, env) {
 
 async function updateComplaint(route, request, env) {
   const session = await requireSession(request, env);
-  if (session.view_role !== "staff") return json({ error: "Staff view is required." }, 403);
+  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
   const complaintId = route.split("/")[1];
   const body = await request.json();
   const status = ["Pending", "Reviewing", "Resolved"].includes(body.status) ? body.status : "Pending";
@@ -281,22 +346,120 @@ async function updateComplaint(route, request, env) {
   return listComplaints(request, env);
 }
 
-async function listQuizzes(env) {
-  const rows = await env.DB.prepare("SELECT * FROM quizzes ORDER BY created_at DESC").all();
-  return json({ quizzes: rows.results.map((quiz) => ({ ...quiz, questions: JSON.parse(quiz.questions_json) })) });
+async function listQuizzes(request, env) {
+  const session = await currentSession(request, env);
+  const courseCode = new URL(request.url).searchParams.get("courseCode")?.trim().toUpperCase();
+  const canReview = session?.role === "staff" || session?.role === "admin";
+  const query = courseCode
+    ? canReview
+      ? env.DB.prepare("SELECT * FROM quizzes WHERE UPPER(COALESCE(course_code, '')) = ? ORDER BY created_at DESC").bind(courseCode)
+      : env.DB.prepare("SELECT * FROM quizzes WHERE UPPER(COALESCE(course_code, '')) = ? AND COALESCE(status, 'published') = 'published' ORDER BY created_at DESC").bind(courseCode)
+    : canReview
+      ? env.DB.prepare("SELECT * FROM quizzes ORDER BY created_at DESC")
+      : env.DB.prepare("SELECT * FROM quizzes WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
+  const rows = await query.all();
+  return json({ quizzes: rows.results.map((quiz) => ({
+    ...quiz,
+    questions: JSON.parse(quiz.questions_json).map((question) => canReview ? question : withoutAnswer(question)),
+    questions_json: undefined,
+  })) });
+}
+
+async function updateQuiz(route, request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
+  const quizId = route.split("/")[1];
+  const body = await request.json();
+  const status = body.status === "published" ? "published" : "draft";
+  const owned = session.role === "admin"
+    ? await env.DB.prepare("SELECT id FROM quizzes WHERE id = ?").bind(quizId).first()
+    : await env.DB.prepare("SELECT id FROM quizzes WHERE id = ? AND owner_id = ?").bind(quizId, session.id).first();
+  if (!owned) return json({ error: "Evaluation not found or not owned by this account." }, 404);
+  await env.DB.prepare("UPDATE quizzes SET status = ? WHERE id = ?").bind(status, quizId).run();
+  await audit(env, session.id, `evaluation.${status}`, "quiz", quizId);
+  return listQuizzes(request, env);
+}
+
+function withoutAnswer(question) {
+  const { answer, correctOptionIndex, ...safeQuestion } = question;
+  return safeQuestion;
 }
 
 async function generateQuiz(request, env) {
   const session = await requireSession(request, env);
-  if (session.view_role !== "staff") return json({ error: "Staff view is required." }, 403);
-  const form = await request.formData();
-  const requested = Math.max(1, Math.min(20, Number(form.get("count") || 5)));
-  const title = form.get("title") || "Generated Lecture Quiz";
-  const note = form.get("note");
-  if (note && note.name) await storeUpload(env, note, "lecture-notes");
-  const questions = Array.from({ length: requested }, (_, index) => sampleQuestions[index % sampleQuestions.length]).map((question, index) => ({ ...question, question: `${index + 1}. ${question.question}` }));
-  await env.DB.prepare("INSERT INTO quizzes VALUES (?, ?, ?, ?, ?)").bind(id("quiz"), title, JSON.stringify(questions), Math.max(120, requested * 45), now()).run();
-  return listQuizzes(env);
+  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
+  const contentType = request.headers.get("Content-Type") || "";
+  const input = contentType.includes("application/json") ? await request.json() : Object.fromEntries((await request.formData()).entries());
+  const requested = Math.max(1, Math.min(20, Number(input.count || 5)));
+  const courseCode = String(input.courseCode || "GEN 100").trim().toUpperCase();
+  const title = String(input.title || "Generated Lecture Quiz").trim();
+  const difficulty = String(input.difficulty || "medium");
+  const sourceName = String(input.noteName || title);
+  let questions;
+  let generatedBy = "fallback";
+  try {
+    questions = await generateQuestionsWithGroq(env, { courseCode, title, difficulty, count: requested, sourceName });
+    generatedBy = "groq";
+  } catch (error) {
+    if (!env.GROQ_API_KEY) {
+      questions = fallbackQuestions(requested);
+    } else {
+      return json({ error: `AI generation could not complete: ${error.message}` }, 502);
+    }
+  }
+  const quizId = id("quiz");
+  await env.DB.prepare("INSERT INTO quizzes (id, title, questions_json, duration_seconds, created_at, course_code, department, level, semester, academic_year, status, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(quizId, title, JSON.stringify(questions), Math.max(120, requested * 60), now(), courseCode, input.department || null, input.level || null, input.semester || null, input.academicYear || null, "draft", session.id).run();
+  await audit(env, session.id, "evaluation.generated", "quiz", quizId, { generatedBy, count: questions.length, courseCode });
+  return listQuizzes(request, env);
+}
+
+function fallbackQuestions(requested) {
+  return Array.from({ length: requested }, (_, index) => sampleQuestions[index % sampleQuestions.length]).map((question) => ({ ...question, explanation: "Review the relevant lecture-note section.", difficulty: "medium", sourceSection: "Lecture note" }));
+}
+
+async function generateQuestionsWithGroq(env, input) {
+  if (!env.GROQ_API_KEY) throw new Error("Groq is not configured");
+  const response = await fetch(`${env.GROQ_BASE_URL || "https://api.groq.com/openai/v1"}/chat/completions`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: env.GROQ_MODEL_EVALUATION || "openai/gpt-oss-120b",
+      temperature: 0.2,
+      max_completion_tokens: Math.min(4000, 500 + input.count * 220),
+      reasoning_effort: "low",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "You create rigorous university MCQs. Return JSON only as {\"questions\":[...]}. Every question must have question, exactly four options, answer as a zero-based integer, explanation, difficulty, and sourceSection. Never include markdown." },
+        { role: "user", content: `Create ${input.count} ${input.difficulty} MCQs for ${input.courseCode}: ${input.title}. The selected lecture note is named ${input.sourceName}. Keep questions academically appropriate and factually cautious.` },
+      ],
+    }),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(response.status === 429 ? "Groq rate limit reached; please retry shortly" : `Groq returned ${response.status}`);
+  const payload = JSON.parse(raw);
+  const parsed = JSON.parse(payload.choices?.[0]?.message?.content || "{}");
+  if (!Array.isArray(parsed.questions) || parsed.questions.length !== input.count) throw new Error("Groq returned an invalid question set");
+  return parsed.questions.map(validateAiQuestion);
+}
+
+function validateAiQuestion(question) {
+  if (!question || typeof question.question !== "string" || !Array.isArray(question.options) || question.options.length !== 4 || !Number.isInteger(question.answer) || question.answer < 0 || question.answer > 3) {
+    throw new Error("Groq returned malformed question data");
+  }
+  return { question: question.question.trim(), options: question.options.map(String), answer: question.answer, explanation: String(question.explanation || ""), difficulty: String(question.difficulty || "medium"), sourceSection: String(question.sourceSection || "Lecture note") };
+}
+
+async function pingGroq(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
+  if (!env.GROQ_API_KEY) return json({ ok: false, error: "Groq is not configured." }, 503);
+  try {
+    const response = await fetch(`${env.GROQ_BASE_URL || "https://api.groq.com/openai/v1"}/models`, { headers: { "Authorization": `Bearer ${env.GROQ_API_KEY}` } });
+    return json({ ok: response.ok, status: response.status, model: env.GROQ_MODEL_EVALUATION || "openai/gpt-oss-120b" }, response.ok ? 200 : 502);
+  } catch (error) {
+    return json({ ok: false, error: String(error?.message || "Groq connection failed") }, 502);
+  }
 }
 
 async function submitQuiz(route, request, env) {
@@ -310,6 +473,57 @@ async function submitQuiz(route, request, env) {
   const score = questions.reduce((total, question, index) => total + (Number(answers[index]) === question.answer ? 1 : 0), 0);
   await env.DB.prepare("INSERT INTO quiz_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id("att"), quizId, session.id, session.matricule || session.phone, JSON.stringify(answers), score, questions.length, now()).run();
   return json({ score, total: questions.length, percent: Math.round((score / questions.length) * 100) });
+}
+
+async function listNotes(request, env) {
+  await requireSession(request, env);
+  const url = new URL(request.url);
+  const search = `%${String(url.searchParams.get("q") || "").trim()}%`;
+  const rows = await env.DB.prepare(`
+    SELECT id, owner_id, course_code, course_title, department, level, semester, academic_year,
+      lecturer_name, original_name, mime_type, file_size, published, created_at
+    FROM lecture_notes
+    WHERE published = 1 AND (course_code LIKE ? COLLATE NOCASE OR course_title LIKE ? COLLATE NOCASE OR lecturer_name LIKE ? COLLATE NOCASE)
+    ORDER BY created_at DESC LIMIT 100
+  `).bind(search, search, search).all();
+  return json({ notes: rows.results.map((note) => ({ ...note, file_url: `/api/files/note/${encodeURIComponent(note.id)}` })) });
+}
+
+async function publishNote(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
+  const form = await request.formData();
+  const file = form.get("note");
+  const required = ["courseCode", "courseTitle", "department", "level", "semester", "academicYear"];
+  if (required.some((field) => !String(form.get(field) || "").trim())) return json({ error: "Complete every academic field before publishing." }, 400);
+  const fileError = await validateDocument(file, 20 * 1024 * 1024);
+  if (fileError) return json({ error: fileError }, 400);
+  const objectKey = await storeUpload(env, file, "lecture-notes");
+  const noteId = id("note");
+  await env.DB.prepare(`
+    INSERT INTO lecture_notes (id, owner_id, course_code, course_title, department, level, semester, academic_year, lecturer_name, object_key, original_name, mime_type, file_size, published, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `).bind(noteId, session.id, String(form.get("courseCode")).trim().toUpperCase(), String(form.get("courseTitle")).trim(), String(form.get("department")).trim(), String(form.get("level")).trim(), String(form.get("semester")).trim(), String(form.get("academicYear")).trim(), session.name, objectKey, file.name, file.type, file.size, now(), now()).run();
+  await audit(env, session.id, "lecture_note.published", "lecture_note", noteId, { courseCode: String(form.get("courseCode")).trim().toUpperCase() });
+  return listNotes(request, env);
+}
+
+async function validateDocument(file, maxSize) {
+  if (!file || !file.name) return "Select a PDF or DOCX file.";
+  if (file.size > maxSize) return "The file is larger than 20 MB.";
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  const accepted = extension === "pdf" || extension === "docx";
+  if (!accepted) return "Only PDF and DOCX files are accepted.";
+  const header = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  const isPdf = extension === "pdf" && String.fromCharCode(...header.slice(0, 5)) === "%PDF-";
+  const isDocx = extension === "docx" && header[0] === 0x50 && header[1] === 0x4b && header[2] === 0x03 && header[3] === 0x04;
+  if (!isPdf && !isDocx) return "The file contents do not match its PDF or DOCX extension.";
+  return null;
+}
+
+async function audit(env, actorId, action, targetType, targetId, metadata = {}) {
+  await env.DB.prepare("INSERT INTO audit_logs VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(id("audit"), actorId || null, action, targetType || null, targetId || null, JSON.stringify(metadata), now()).run();
 }
 
 async function listVotes(request, env) {
@@ -348,13 +562,18 @@ async function createMessage(route, request, env) {
   const channel = decodeURIComponent(route.split("/")[1]);
   const body = await request.json();
   if (!body.body) return json({ error: "Message cannot be empty." }, 400);
+  if (containsLink(body.body)) return json({ error: "Links are not allowed in the General Forum." }, 400);
   await env.DB.prepare("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)").bind(id("msg"), channel, session.id, session.name, body.body, now()).run();
   return listMessages(route, env);
 }
 
+function containsLink(value) {
+  return /(?:https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|org|net|edu|io|co|cm)\b|<a\s)/i.test(String(value));
+}
+
 async function getThesis(request, env) {
   const session = await requireSession(request, env);
-  if (session.view_role === "staff") {
+  if (session.role === "staff" || session.role === "admin") {
     const rows = await env.DB.prepare("SELECT * FROM thesis_requests ORDER BY updated_at DESC").all();
     return json({ requests: rows.results.map(presentThesis) });
   }
@@ -388,7 +607,7 @@ async function submitPayment(request, env) {
 
 async function reviewPayment(route, request, env) {
   const session = await requireSession(request, env);
-  if (session.view_role !== "staff") return json({ error: "Staff view is required." }, 403);
+  if (session.role !== "staff" && session.role !== "admin") return json({ error: "Staff access is required." }, 403);
   const requestId = route.split("/")[1];
   const body = await request.json();
   const status = body.status === "approved" ? "approved" : "rejected";
@@ -404,30 +623,47 @@ async function uploadThesis(request, env) {
   const thesis = form.get("thesis");
   if (!thesis || !thesis.name) return json({ error: "Please upload a thesis file." }, 400);
   const key = await storeUpload(env, thesis, "thesis-files");
-  const plagiarism = 8 + Math.floor(Math.random() * 19);
-  const ai = 12 + Math.floor(Math.random() * 23);
   const analysis = {
-    plagiarism,
-    ai,
+    similarity: 0,
+    coverage: "This report currently compares exact text only against documents stored and authorized inside HICM Portal. It is not Turnitin and does not search subscription academic databases.",
     excerpts: [
-      "Chapter two contains phrasing that closely resembles common literature review templates.",
-      "The methodology section is mostly original but should cite the sampling framework more clearly.",
-      "Conclusion language is polished; verify that generated-sounding summary statements reflect your own findings.",
+      "No deterministic internal-text match was recorded for this upload.",
+      "Review quotations, paraphrases, and bibliography entries manually before final submission.",
+      "Writing recommendations are advisory and do not establish authorship or academic misconduct.",
     ],
   };
   await env.DB.prepare("UPDATE thesis_requests SET thesis_key = ?, analysis_json = ?, updated_at = ? WHERE user_id = ?").bind(key, JSON.stringify(analysis), now(), session.id).run();
   return getThesis(request, env);
 }
 
-async function readFile(route, env) {
+async function readFile(route, request, env) {
+  const session = await requireSession(request, env);
   if (!env.UPLOADS) return json({ error: "Cloudflare R2 binding UPLOADS is not configured." }, 500);
-  const key = decodeURIComponent(route.replace(/^files\//, ""));
+  let key = decodeURIComponent(route.replace(/^files\//, ""));
+  if (key.startsWith("note/")) {
+    const noteId = key.slice(5);
+    const note = await env.DB.prepare("SELECT object_key FROM lecture_notes WHERE id = ? AND published = 1").bind(noteId).first();
+    if (!note) return json({ error: "File not found." }, 404);
+    key = note.object_key;
+  } else if (!await canReadPrivateKey(env, session, key)) {
+    return json({ error: "You do not have permission to view this file." }, 403);
+  }
   const object = await env.UPLOADS.get(key);
   if (!object) return json({ error: "File not found." }, 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
+  for (const [name, value] of Object.entries(securityHeaders())) headers.set(name, value);
+  headers.set("Cache-Control", "private, no-store");
   return new Response(object.body, { headers });
+}
+
+async function canReadPrivateKey(env, session, key) {
+  if (session.role === "staff" || session.role === "admin") return true;
+  if (key.startsWith("lecture-notes/")) return true;
+  if (key.startsWith("complaint-proofs/")) return !!await env.DB.prepare("SELECT id FROM complaints WHERE user_id = ? AND proof_key = ?").bind(session.id, key).first();
+  if (key.startsWith("payment-screenshots/") || key.startsWith("thesis-files/")) return !!await env.DB.prepare("SELECT id FROM thesis_requests WHERE user_id = ? AND (screenshot_key = ? OR thesis_key = ?)").bind(session.id, key, key).first();
+  return false;
 }
 
 async function storeUpload(env, file, folder) {
