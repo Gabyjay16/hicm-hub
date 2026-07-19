@@ -1,60 +1,25 @@
-import { Send } from "lucide-react";
+import { Archive, ImagePlus, Send, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
 import { useApp } from "../context/AppContext";
-import { api, postJson } from "../utils/api";
+import { api, deleteJson, patchJson } from "../utils/api";
 
 export default function Announcements() {
-  const { viewRole, requireAuth, setToast } = useApp();
+  const { user, setToast } = useApp();
   const [announcements, setAnnouncements] = useState([]);
-  const [form, setForm] = useState({ title: "", body: "" });
-
-  async function load() {
-    const data = await api("/announcements");
-    setAnnouncements(data.announcements);
-  }
-
-  useEffect(() => {
-    load().catch((error) => setToast(error.message));
-  }, []);
+  async function load() { const data = await api("/announcements"); setAnnouncements(data.announcements || []); }
+  useEffect(() => { load().catch((error) => setToast(error.message)); }, []);
 
   async function submit(event) {
     event.preventDefault();
-    if (!requireAuth()) return;
-    try {
-      const data = await postJson("/announcements", form);
-      setAnnouncements(data.announcements);
-      setForm({ title: "", body: "" });
-      setToast("Announcement posted");
-    } catch (error) {
-      setToast(error.message);
-    }
+    const form = new FormData(event.currentTarget);
+    try { const data = await api("/announcements", { method: "POST", body: form }); setAnnouncements(data.announcements); event.currentTarget.reset(); setToast("Announcement published"); } catch (error) { setToast(error.message); }
   }
+  async function archive(item) { const data = await patchJson(`/announcements/${item.id}`, { title: item.title, body: item.body, status: "archived", publishAt: item.publish_at }); setAnnouncements(data.announcements); }
+  async function remove(item) { if (!confirm(`Delete "${item.title}"?`)) return; const data = await deleteJson(`/announcements/${item.id}`); setAnnouncements(data.announcements); }
 
-  return (
-    <div className="page-shell">
-      <PageHeader eyebrow="Campus Life" title="Announcements Board" description="A clean official bulletin feed for academic and administrative notices." />
-
-      {viewRole === "staff" && (
-        <form onSubmit={submit} className="panel mb-8 grid gap-4 p-5">
-          <h2 className="text-lg font-black text-slate-950">Create Official Notice</h2>
-          <input className="field" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Notice title" required />
-          <textarea className="field min-h-28" value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="Write the announcement..." required />
-          <button className="btn-primary w-fit"><Send size={17} /> Post Notice</button>
-        </form>
-      )}
-
-      <div className="relative grid gap-4 before:absolute before:left-4 before:top-2 before:h-full before:w-px before:bg-slate-200">
-        {announcements.map((item) => (
-          <article key={item.id} className="relative ml-10 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <span className="absolute -left-[2.65rem] top-6 h-4 w-4 rounded-full border-4 border-white bg-teal-700 shadow" />
-            <p className="text-xs font-black uppercase text-teal-700">{new Date(item.created_at).toLocaleString()}</p>
-            <h2 className="mt-2 text-xl font-black text-slate-950">{item.title}</h2>
-            <p className="mt-3 leading-7 text-slate-600">{item.body}</p>
-            <p className="mt-4 text-sm font-bold text-slate-500">Posted by {item.author}</p>
-          </article>
-        ))}
-      </div>
-    </div>
-  );
+  return <div className="page-shell"><PageHeader eyebrow="Campus Life" title="Announcements" description="Official academic and administrative notices." />
+    {user?.role === "admin" && <form onSubmit={submit} className="panel mb-8 grid gap-4 p-5"><h2 className="text-lg font-black text-navy">Publish announcement</h2><label className="grid gap-1"><span className="label">Title</span><input className="field" name="title" required /></label><label className="grid gap-1"><span className="label">Message</span><textarea className="field min-h-28" name="body" required /></label><label className="upload-dropzone"><ImagePlus size={28} /><span className="font-bold">Add a picture or video</span><span className="text-xs text-slate-500">JPG, PNG, WebP, MP4, or WebM</span><input className="sr-only" type="file" name="media" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" /></label><input type="hidden" name="status" value="published" /><button className="btn-primary w-fit"><Send size={17} /> Publish</button></form>}
+    <div className="divide-y divide-slate-200 border-y border-slate-200 bg-white">{announcements.map((item) => <article key={item.id} className="p-5"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-black uppercase text-teal-700">{item.status} · {new Date(item.publish_at || item.created_at).toLocaleString()}</p><h2 className="mt-2 text-xl font-black text-navy">{item.title}</h2></div>{user?.role === "admin" && <div className="flex gap-1"><button className="p-2 text-slate-500 hover:text-teal-700" aria-label="Archive announcement" onClick={() => archive(item)}><Archive size={18} /></button><button className="p-2 text-slate-500 hover:text-rose-700" aria-label="Delete announcement" onClick={() => remove(item)}><Trash2 size={18} /></button></div>}</div><p className="mt-3 whitespace-pre-wrap leading-7 text-slate-600">{item.body}</p>{item.media_url && (item.media_type?.startsWith("video/") ? <video className="mt-4 max-h-[480px] w-full bg-black" controls src={item.media_url} /> : <img className="mt-4 max-h-[560px] w-full object-contain" src={item.media_url} alt={item.title} />)}</article>)}</div>
+  </div>;
 }
