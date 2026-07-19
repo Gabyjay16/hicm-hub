@@ -1,6 +1,7 @@
 name = "hicm-hub"
 compatibility_date = "2026-07-13"
 pages_build_output_dir = "dist"
+compatibility_flags = ["nodejs_compat"]
 
 [vars]
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
@@ -18,3 +19,7 @@ database_id = "bc9a2b59-e792-4eb4-8ce5-6ef3b348f945"
 [[r2_buckets]]
 binding = "UPLOADS"
 bucket_name = "hicm-hub-uploads"
+
+[[queues.producers]]
+binding = "ANALYSIS_QUEUE"
+queue = "hicm-analysis"
