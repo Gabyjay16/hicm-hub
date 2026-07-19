@@ -2,6 +2,14 @@ name = "hicm-hub"
 compatibility_date = "2026-07-13"
 pages_build_output_dir = "dist"
 
+[vars]
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+GROQ_MODEL_EVALUATION = "openai/gpt-oss-120b"
+GROQ_MODEL_CHUNK = "openai/gpt-oss-20b"
+GROQ_MODEL_ANALYSIS = "openai/gpt-oss-120b"
+GROQ_MODEL_WEB = "groq/compound"
+ENABLE_GROQ_WEB_SEARCH = "false"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "hicm-hub-db"
