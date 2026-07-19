@@ -1,7 +1,9 @@
 import { processAnalysisJob } from "../lib/analysis-job.js";
-import { announcementSchema, authSchema, complaintSchema, evaluationSchema, forumTextSchema, lostFoundSchema, parseBody } from "../../shared/schemas.ts";
+import { announcementSchema, authSchema, complaintSchema, departments, evaluationSchema, forumTextSchema, lostFoundSchema, parseBody } from "../../shared/schemas.ts";
 
-const CHANNELS = ["General"];
+const DEPARTMENTS = [...departments];
+const CHANNELS = ["General", ...DEPARTMENTS];
+const DOCUMENT_TYPES = ["Attestation of Completion of Studies", "Draft Transcript", "Admission Letter", "Student Attendance", "Others"];
 
 const CANDIDATES = [
   { id: "ngalle", name: "Ngalle Prisca", post: "Student Union President", vision: "Transparent grants, safer transport, and faster academic support." },
@@ -79,6 +81,7 @@ export async function onRequest(context) {
     if (route === "admin/analysis" && request.method === "GET") return await listAnalysisAdmin(request, env);
     if (route === "admin/analysis/settings" && request.method === "GET") return await getAnalysisSettings(request, env);
     if (route === "admin/analysis/settings" && request.method === "PATCH") return await updateAnalysisSettings(request, env);
+    if (/^admin\/analysis\/[^/]+\/publish-result$/.test(route) && request.method === "PATCH") return await publishAnalysisResult(route, request, env);
     if (/^admin\/analysis\/[^/]+\/note$/.test(route) && request.method === "POST") return await addAnalysisAdminNote(route, request, env);
     if (/^admin\/analysis\/[^/]+\/restore-entitlement$/.test(route) && request.method === "POST") return await restoreAnalysisEntitlement(route, request, env);
     if (route === "admin/elections" && request.method === "POST") return await createElection(request, env);
@@ -86,6 +89,10 @@ export async function onRequest(context) {
     if (route === "admin/forum/moderation" && request.method === "GET") return await listForumModeration(request, env);
     if (/^admin\/forum\/messages\/[^/]+$/.test(route) && request.method === "PATCH") return await moderateForumMessage(route, request, env);
     if (/^admin\/forum\/users\/[^/]+$/.test(route) && request.method === "PATCH") return await restrictForumUser(route, request, env);
+    if (route === "admin/matricule-registry" && request.method === "GET") return await getMatriculeRegistry(request, env);
+    if (route === "admin/matricule-registry" && request.method === "POST") return await replaceMatriculeRegistry(request, env);
+    if (route === "admin/matricule-registry" && request.method === "DELETE") return await clearMatriculeRegistry(request, env);
+    if (route === "admin/matricule-registry/settings" && request.method === "PATCH") return await updateMatriculeRegistrySettings(request, env);
 
     if (route === "notifications" && request.method === "GET") return await listNotifications(request, env);
     if (route === "notifications/read-all" && request.method === "POST") return await readAllNotifications(request, env);
@@ -144,7 +151,12 @@ export async function onRequest(context) {
     if (/^forums\/messages\/[^/]+\/report$/.test(route) && request.method === "POST") return await reportMessage(route, request, env);
     if (/^forums\/messages\/[^/]+\/media$/.test(route) && request.method === "GET") return await readForumMedia(route, request, env);
 
+    if (route === "document-requests" && request.method === "GET") return await listDocumentRequests(request, env);
+    if (route === "document-requests" && request.method === "POST") return await createDocumentRequest(request, env);
+    if (/^document-requests\/[^/]+$/.test(route) && request.method === "PATCH") return await reviewDocumentRequest(route, request, env);
+
     if (route === "thesis" && request.method === "GET") return await getThesis(request, env);
+    if (route === "thesis/verify" && request.method === "GET") return await verifyThesisResult(request, env);
     if (route === "thesis/payment" && request.method === "POST") return await submitPayment(request, env);
     if (route === "thesis/upload" && request.method === "POST") return await uploadThesis(request, env, context);
     if (/^thesis\/jobs\/[^/]+$/.test(route) && request.method === "GET") return await getAnalysisJob(route, request, env);
@@ -255,9 +267,9 @@ async function seedData(db) {
     }
   }
 
-  const messageCount = await count(db, "messages");
-  if (!messageCount) {
-    for (const channel of CHANNELS) {
+  for (const channel of CHANNELS) {
+    const messageCount = await db.prepare("SELECT COUNT(*) AS total FROM messages WHERE channel = ?").bind(channel).first();
+    if (!Number(messageCount.total)) {
       await db.prepare("INSERT INTO messages (id, channel, user_id, author, body, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id("msg"), channel, "system", "HICM Moderator", `Welcome to #${channel}. Keep it useful, respectful, and academic.`, now()).run();
     }
   }
@@ -314,7 +326,13 @@ async function requireStaff(request, env) {
 
 async function getSessionResponse(request, env) {
   const session = await currentSession(request, env);
-  return json({ session: session ? presentSession(session) : null, candidates: CANDIDATES, channels: CHANNELS });
+  return json({ session: session ? presentSession(session) : null, candidates: CANDIDATES, channels: session ? availableChannels(session) : [] });
+}
+
+function availableChannels(session) {
+  if (session.role === "admin") return CHANNELS;
+  if (session.role === "staff") return session.forum_access ? CHANNELS : [];
+  return ["General", ...(DEPARTMENTS.includes(session.department) ? [session.department] : [])];
 }
 
 function presentSession(session) {
@@ -329,6 +347,7 @@ function presentSession(session) {
       position: session.position,
       matricule: session.matricule,
       phone: session.phone,
+      department: session.department,
       forumAccess: session.role === "admin" || Boolean(session.forum_access),
       moderationAccess: session.role === "admin" || Boolean(session.moderation_access),
     },
@@ -338,45 +357,58 @@ function presentSession(session) {
 async function authenticate(request, env) {
   const body = parseBody(authSchema, await request.json());
   await enforceRateLimit(env, request, "authenticate", 8, 15 * 60);
-  const normalizedName = String(body.name).trim().toLowerCase();
-  const existingStaff = await env.DB.prepare("SELECT id FROM users WHERE role = 'staff' AND normalized_name = ?").bind(normalizedName).first();
-  const enteredCredential = String(body.credential || "");
-  const role = existingStaff || body.role === "staff" || /^STF-/i.test(enteredCredential || String(body.accessCode || "")) ? "staff" : "student";
-  const name = String(body.name || "").trim();
-  if (!name) return json({ error: "Enter your full name and credential." }, 400);
+  if (!env.PASSWORD_PEPPER) return json({ error: "Password authentication is not configured." }, 503);
+
+  const operation = body.mode || (body.accessCode ? "staff-register" : "login");
+  const password = String(body.password || "");
   let user;
 
-  if (role === "student") {
-    const matricule = String(body.matricule || enteredCredential).trim().toUpperCase();
-    if (!matricule) return json({ error: "Enter your full name and credential." }, 400);
-    user = await env.DB.prepare("SELECT * FROM users WHERE UPPER(matricule) = ? AND role = 'student'").bind(matricule).first();
-    if (user && user.name.trim().toLowerCase() !== name.toLowerCase()) return json({ error: "The supplied login details are not valid." }, 401);
-    if (!user) {
-      const phone = String(body.phone || "").trim();
-      if (!phone) return json({ error: "Phone number is required for student registration." }, 400);
-      user = { id: id("usr"), role, name, position: null, matricule, phone, created_at: now() };
-      await env.DB.prepare("INSERT INTO users (id, role, name, position, matricule, phone, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(user.id, user.role, user.name, user.position, user.matricule, user.phone, user.created_at).run();
+  if (operation === "student-register") {
+    const name = String(body.name || "").trim();
+    const matricule = normalizeMatricule(body.matricule);
+    const phone = String(body.phone || "").trim();
+    const department = String(body.department || "");
+    if (!name || !matricule || !phone || !DEPARTMENTS.includes(department)) return json({ error: "Complete every student registration field." }, 400);
+    if (password !== body.confirmPassword) return json({ error: "The passwords do not match." }, 400);
+
+    const registry = await env.DB.prepare("SELECT * FROM student_registration_settings WHERE id = 'default'").first();
+    if (registry?.enforced) {
+      const allowed = registry.active_batch_id
+        ? await env.DB.prepare("SELECT 1 AS allowed FROM student_matricule_registry WHERE batch_id = ? AND normalized_matricule = ?").bind(registry.active_batch_id, matricule).first()
+        : null;
+      if (!allowed) return json({ error: "student having this matricule is not an HICM student" }, 403);
     }
-  } else {
-    const password = String(body.password || enteredCredential || "");
-    user = await env.DB.prepare(`
-      SELECT users.*, COALESCE(staff_permissions.is_admin, 0) AS is_admin,
-        COALESCE(staff_permissions.forum_access, 0) AS forum_access,
-        COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
-      FROM users LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
-      WHERE users.role = 'staff' AND LOWER(TRIM(users.name)) = LOWER(TRIM(?))
-    `).bind(name).first();
-    if (user) {
-      if (!user.password_hash || !env.PASSWORD_PEPPER || !await verifyPassword(password, user.password_salt, user.password_hash, env.PASSWORD_PEPPER)) return json({ error: "The supplied login details are not valid." }, 401);
+
+    const existing = await env.DB.prepare("SELECT * FROM users WHERE role = 'student' AND UPPER(TRIM(matricule)) = ?").bind(matricule).first();
+    const credentials = await hashPassword(password, env.PASSWORD_PEPPER);
+    if (existing?.password_hash) return json({ error: "This matricule has already been used for registration." }, 409);
+    if (existing) {
+      const sameLegacyOwner = existing.name.trim().toLowerCase() === name.toLowerCase() && String(existing.phone || "").replace(/\D/g, "") === phone.replace(/\D/g, "");
+      if (!sameLegacyOwner) return json({ error: "This matricule has already been used for registration." }, 409);
+      await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ?, department = ?, name = ?, phone = ? WHERE id = ?")
+        .bind(credentials.hash, credentials.salt, department, name, phone, existing.id).run();
+      user = { ...existing, name, phone, department, password_hash: credentials.hash, password_salt: credentials.salt };
     } else {
-      const accessCode = String(body.accessCode || enteredCredential || "").trim().toUpperCase();
+      user = { id: id("usr"), role: "student", name, position: null, matricule, phone, department, created_at: now(), account_status: "active" };
+      try {
+        await env.DB.prepare("INSERT INTO users (id, role, name, normalized_name, position, matricule, phone, department, created_at, password_hash, password_salt) VALUES (?, 'student', ?, ?, NULL, ?, ?, ?, ?, ?, ?)")
+          .bind(user.id, name, name.toLowerCase(), matricule, phone, department, user.created_at, credentials.hash, credentials.salt).run();
+      } catch (error) {
+        if (String(error.message).includes("UNIQUE")) return json({ error: "This matricule has already been used for registration." }, 409);
+        throw error;
+      }
+      await audit(env, user.id, "student.registered", "user", user.id, { department });
+    }
+  } else if (operation === "staff-register") {
+      const name = String(body.name || "").trim();
+      const normalizedName = name.toLowerCase();
+      const accessCode = String(body.accessCode || body.credential || "").trim().toUpperCase();
       const code = await env.DB.prepare("SELECT id FROM staff_access_codes WHERE code = ? AND revoked_at IS NULL AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP").bind(accessCode).first();
       if (!code) return json({ error: "This staff access code is invalid, expired, or already used." }, 403);
-      if (!body.position || password.length < 8) return json({ error: "Staff registration requires a position and password of at least 8 characters." }, 400);
-      if (!env.PASSWORD_PEPPER) return json({ error: "Staff authentication is not configured." }, 503);
+      if (!name || !body.position || !body.phone) return json({ error: "Complete every staff registration field." }, 400);
       const credentials = await hashPassword(password, env.PASSWORD_PEPPER);
       if (password !== body.confirmPassword) return json({ error: "The passwords do not match." }, 400);
-      user = { id: id("usr"), role, name, position: String(body.position).trim(), matricule: null, phone: String(body.phone || "").trim(), created_at: now() };
+      user = { id: id("usr"), role: "staff", name, position: String(body.position).trim(), matricule: null, phone: String(body.phone || "").trim(), department: null, created_at: now(), account_status: "active", forum_access: 0, moderation_access: 0 };
       try {
         await env.DB.batch([
           env.DB.prepare(`
@@ -394,31 +426,49 @@ async function authenticate(request, env) {
         if (String(error.message).includes("FOREIGN KEY")) return json({ error: "This staff access code is invalid, expired, or revoked." }, 403);
         throw error;
       }
-    }
+  } else {
+    const identifier = String(body.identifier || body.credential || body.matricule || body.name || "").trim();
+    if (!identifier || !password) return json({ error: "Enter your matricule or staff name and password." }, 400);
+    const normalizedIdentifier = identifier.toLowerCase();
+    user = await env.DB.prepare(`
+      SELECT users.*, COALESCE(staff_permissions.is_admin, 0) AS is_admin,
+        COALESCE(staff_permissions.forum_access, 0) AS forum_access,
+        COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
+      FROM users LEFT JOIN staff_permissions ON staff_permissions.user_id = users.id
+      WHERE (users.role = 'student' AND UPPER(TRIM(users.matricule)) = ?)
+         OR (users.role = 'staff' AND LOWER(TRIM(users.name)) = ?)
+      ORDER BY CASE WHEN users.role = 'student' THEN 0 ELSE 1 END LIMIT 1
+    `).bind(normalizeMatricule(identifier), normalizedIdentifier).first();
+    if (!user || !user.password_hash || !await verifyPassword(password, user.password_salt, user.password_hash, env.PASSWORD_PEPPER)) return json({ error: "The supplied login details are not valid." }, 401);
   }
 
   if (user.account_status === "blocked") return json({ error: "The supplied login details are not valid." }, 401);
 
   const token = crypto.randomUUID();
   const csrfToken = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+  const remembered = Boolean(body.remember);
+  const maxAge = remembered ? 30 * 24 * 60 * 60 : 12 * 60 * 60;
+  const expiresAt = new Date(Date.now() + maxAge * 1000).toISOString();
+  const viewRole = user.role === "student" ? "student" : "staff";
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO sessions (token, user_id, view_role, created_at, csrf_token, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(token, user.id, role, now(), csrfToken, expiresAt, now()),
-    env.DB.prepare("UPDATE users SET last_login_at = ?, normalized_name = COALESCE(normalized_name, ?) WHERE id = ?").bind(now(), normalizedName, user.id),
+    env.DB.prepare("INSERT INTO sessions (token, user_id, view_role, created_at, csrf_token, expires_at, last_seen_at, remembered) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(token, user.id, viewRole, now(), csrfToken, expiresAt, now(), remembered ? 1 : 0),
+    env.DB.prepare("UPDATE users SET last_login_at = ?, normalized_name = COALESCE(normalized_name, ?) WHERE id = ?").bind(now(), user.name.trim().toLowerCase(), user.id),
   ]);
-  const session = { token, csrf_token: csrfToken, expires_at: expiresAt, view_role: role, ...user };
+  const session = { token, csrf_token: csrfToken, expires_at: expiresAt, view_role: viewRole, ...user };
   if (user.is_admin) session.role = "admin";
-  return json({ session: presentSession(session) }, 200, { "Set-Cookie": `hicm_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=43200` });
+  return json({ session: presentSession(session), candidates: CANDIDATES, channels: availableChannels(session) }, 200, { "Set-Cookie": `hicm_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=${maxAge}` });
+}
+
+function normalizeMatricule(value) {
+  return String(value || "").trim().toUpperCase();
 }
 
 async function resolveAuthMode(request, env) {
   await enforceRateLimit(env, request, "auth_resolve", 20, 15 * 60);
   const body = await request.json();
-  const name = String(body.name || "").trim().toLowerCase();
   const credential = String(body.credential || "").trim().toUpperCase();
-  const staff = name ? await env.DB.prepare("SELECT id FROM users WHERE role = 'staff' AND normalized_name = ? AND account_status = 'active'").bind(name).first() : null;
   const code = /^STF-/.test(credential) ? await env.DB.prepare("SELECT id FROM staff_access_codes WHERE code = ? AND revoked_at IS NULL AND used_at IS NULL AND datetime(expires_at) > CURRENT_TIMESTAMP").bind(credential).first() : null;
-  return json({ mode: code ? "staff-registration" : staff ? "staff-login" : "student" });
+  return json({ mode: code ? "staff-registration" : "login" });
 }
 
 async function enforceRateLimit(env, request, action, limit, windowSeconds) {
@@ -528,7 +578,7 @@ async function bootstrapAdmin(request, env) {
 
 async function adminOverview(request, env) {
   await requireAdmin(request, env);
-  const [users, students, staff, openComplaints, pendingPayments, queuedAnalysis, unreadReports] = await Promise.all([
+  const [users, students, staff, openComplaints, pendingPayments, queuedAnalysis, unreadReports, openDocuments] = await Promise.all([
     count(env.DB, "users"),
     env.DB.prepare("SELECT COUNT(*) AS total FROM users WHERE role = 'student'").first(),
     env.DB.prepare("SELECT COUNT(*) AS total FROM users WHERE role = 'staff'").first(),
@@ -536,14 +586,15 @@ async function adminOverview(request, env) {
     env.DB.prepare("SELECT COUNT(*) AS total FROM thesis_requests WHERE status = 'pending'").first(),
     env.DB.prepare("SELECT COUNT(*) AS total FROM analysis_jobs WHERE status IN ('queued', 'processing', 'failed')").first(),
     env.DB.prepare("SELECT COUNT(*) AS total FROM forum_reports WHERE status = 'open'").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM document_requests WHERE status IN ('submitted', 'reviewing')").first(),
   ]);
-  return json({ metrics: { users, students: students.total, staff: staff.total, openComplaints: openComplaints.total, pendingPayments: pendingPayments.total, queuedAnalysis: queuedAnalysis.total, openForumReports: unreadReports.total } });
+  return json({ metrics: { users, students: students.total, staff: staff.total, openComplaints: openComplaints.total, pendingPayments: pendingPayments.total, queuedAnalysis: queuedAnalysis.total, openForumReports: unreadReports.total, openDocuments: openDocuments.total } });
 }
 
 async function adminUsers(request, env) {
   await requireAdmin(request, env);
   const rows = await env.DB.prepare(`
-    SELECT users.id, users.name, users.role, users.position, users.matricule, users.phone, users.account_status, users.created_at,
+    SELECT users.id, users.name, users.role, users.position, users.matricule, users.phone, users.department, users.account_status, users.created_at,
       COALESCE(staff_permissions.is_admin, 0) AS is_admin,
       COALESCE(staff_permissions.forum_access, 0) AS forum_access,
       COALESCE(staff_permissions.moderation_access, 0) AS moderation_access
@@ -551,6 +602,60 @@ async function adminUsers(request, env) {
     ORDER BY users.created_at DESC LIMIT 250
   `).all();
   return json({ users: rows.results });
+}
+
+async function getMatriculeRegistry(request, env) {
+  await requireAdmin(request, env);
+  const settings = await env.DB.prepare("SELECT * FROM student_registration_settings WHERE id = 'default'").first();
+  const rows = settings?.active_batch_id
+    ? await env.DB.prepare("SELECT matricule FROM student_matricule_registry WHERE batch_id = ? ORDER BY matricule LIMIT 100").bind(settings.active_batch_id).all()
+    : { results: [] };
+  return json({
+    settings: settings || { enforced: 0, total_records: 0 },
+    preview: rows.results.map((row) => row.matricule),
+  });
+}
+
+async function replaceMatriculeRegistry(request, env) {
+  const session = await requireAdmin(request, env);
+  const body = await request.json();
+  if (!Array.isArray(body.matricules)) return json({ error: "Upload an Excel or CSV file containing matricules." }, 400);
+  const matricules = [...new Set(body.matricules.map(normalizeMatricule).filter((value) => value.length >= 2 && value.length <= 40))];
+  if (!matricules.length) return json({ error: "No valid matricules were found in this file." }, 400);
+  if (matricules.length > 10000) return json({ error: "A matricule file can contain at most 10,000 unique records." }, 400);
+
+  const batchId = id("registry");
+  const timestamp = now();
+  for (let offset = 0; offset < matricules.length; offset += 75) {
+    await env.DB.batch(matricules.slice(offset, offset + 75).map((matricule) => env.DB.prepare(
+      "INSERT INTO student_matricule_registry (batch_id, matricule, normalized_matricule, imported_at, imported_by) VALUES (?, ?, ?, ?, ?)",
+    ).bind(batchId, matricule, matricule, timestamp, session.id)));
+  }
+  const previous = await env.DB.prepare("SELECT active_batch_id FROM student_registration_settings WHERE id = 'default'").first();
+  await env.DB.prepare(`UPDATE student_registration_settings SET active_batch_id = ?, source_name = ?, total_records = ?, uploaded_by = ?, uploaded_at = ?, updated_at = ? WHERE id = 'default'`)
+    .bind(batchId, String(body.sourceName || "matricules.xlsx").slice(0, 180), matricules.length, session.id, timestamp, timestamp).run();
+  if (previous?.active_batch_id) await env.DB.prepare("DELETE FROM student_matricule_registry WHERE batch_id = ?").bind(previous.active_batch_id).run();
+  await audit(env, session.id, "student_registry.replaced", "student_matricule_registry", batchId, { count: matricules.length, sourceName: body.sourceName });
+  return getMatriculeRegistry(request, env);
+}
+
+async function updateMatriculeRegistrySettings(request, env) {
+  const session = await requireAdmin(request, env);
+  const body = await request.json();
+  const current = await env.DB.prepare("SELECT * FROM student_registration_settings WHERE id = 'default'").first();
+  if (body.enforced && !Number(current?.total_records)) return json({ error: "Upload a matricule file before enabling registration enforcement." }, 409);
+  await env.DB.prepare("UPDATE student_registration_settings SET enforced = ?, updated_at = ? WHERE id = 'default'").bind(body.enforced ? 1 : 0, now()).run();
+  await audit(env, session.id, "student_registry.enforcement_updated", "student_registration_settings", "default", { enforced: Boolean(body.enforced) });
+  return getMatriculeRegistry(request, env);
+}
+
+async function clearMatriculeRegistry(request, env) {
+  const session = await requireAdmin(request, env);
+  const current = await env.DB.prepare("SELECT active_batch_id FROM student_registration_settings WHERE id = 'default'").first();
+  await env.DB.prepare("UPDATE student_registration_settings SET enforced = 0, active_batch_id = NULL, source_name = NULL, total_records = 0, uploaded_by = NULL, uploaded_at = NULL, updated_at = ? WHERE id = 'default'").bind(now()).run();
+  if (current?.active_batch_id) await env.DB.prepare("DELETE FROM student_matricule_registry WHERE batch_id = ?").bind(current.active_batch_id).run();
+  await audit(env, session.id, "student_registry.cleared", "student_registration_settings", "default");
+  return getMatriculeRegistry(request, env);
 }
 
 async function listStaffCodes(request, env) {
@@ -617,21 +722,21 @@ async function updateForumSettings(request, env) {
     INSERT INTO forum_settings (channel, links_enabled, images_enabled, audio_enabled, image_max_bytes, audio_max_bytes, suspended, suspension_message, updated_by, updated_at)
     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(channel) DO UPDATE SET links_enabled = 0, images_enabled = excluded.images_enabled, audio_enabled = excluded.audio_enabled, image_max_bytes = excluded.image_max_bytes, audio_max_bytes = excluded.audio_max_bytes, suspended = excluded.suspended, suspension_message = excluded.suspension_message, updated_by = excluded.updated_by, updated_at = excluded.updated_at
-  `).bind(channel, (body.imagesEnabled ?? Boolean(current?.images_enabled)) ? 1 : 0, (body.audioEnabled ?? Boolean(current?.audio_enabled)) ? 1 : 0, Math.max(1048576, Math.min(20971520, Number(body.imageMaxBytes || current?.image_max_bytes || 10485760))), Math.max(1048576, Math.min(52428800, Number(body.audioMaxBytes || current?.audio_max_bytes || 26214400))), (body.suspended ?? Boolean(current?.suspended)) ? 1 : 0, String(body.suspensionMessage || current?.suspension_message || "The General Forum is temporarily suspended by administration.").slice(0, 240), session.id, now()).run();
+  `).bind(channel, (body.imagesEnabled ?? Boolean(current?.images_enabled)) ? 1 : 0, (body.audioEnabled ?? Boolean(current?.audio_enabled)) ? 1 : 0, Math.max(1048576, Math.min(20971520, Number(body.imageMaxBytes || current?.image_max_bytes || 10485760))), Math.max(1048576, Math.min(52428800, Number(body.audioMaxBytes || current?.audio_max_bytes || 26214400))), (body.suspended ?? Boolean(current?.suspended)) ? 1 : 0, String(body.suspensionMessage || current?.suspension_message || `#${channel} is temporarily suspended by administration.`).slice(0, 240), session.id, now()).run();
   await audit(env, session.id, "forum.settings_updated", "forum_channel", channel, body);
   return getForumSettings(request, env);
 }
 
 async function getForumSettings(request, env) {
   await requireAdmin(request, env);
-  const settings = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = 'General'").first();
-  return json({ settings });
+  const rows = await env.DB.prepare("SELECT * FROM forum_settings ORDER BY CASE WHEN channel = 'General' THEN 0 ELSE 1 END, channel").all();
+  return json({ settings: rows.results });
 }
 
 async function listForumReports(request, env) {
   await requireAdmin(request, env);
   const rows = await env.DB.prepare(`
-    SELECT forum_reports.*, messages.body, messages.author, users.name AS reporter_name
+    SELECT forum_reports.*, messages.body, messages.author, messages.channel, users.name AS reporter_name
     FROM forum_reports JOIN messages ON messages.id = forum_reports.message_id
     JOIN users ON users.id = forum_reports.reporter_id
     ORDER BY forum_reports.created_at DESC LIMIT 100
@@ -664,13 +769,47 @@ async function listAnalysisAdmin(request, env) {
   await requireAdmin(request, env);
   const rows = await env.DB.prepare(`
     SELECT analysis_jobs.*, analysis_documents.original_name, users.name AS student_name, users.matricule,
-      analysis_reports.similarity_percent, analysis_reports.matched_shingles, analysis_reports.total_shingles
+      analysis_reports.similarity_percent, analysis_reports.matched_shingles, analysis_reports.total_shingles,
+      analysis_reports.thesis_title, analysis_reports.plagiarism_percent, analysis_reports.ai_use_percent,
+      analysis_reports.verification_code, analysis_reports.published_at
     FROM analysis_jobs JOIN analysis_documents ON analysis_documents.id = analysis_jobs.document_id
     JOIN users ON users.id = analysis_jobs.user_id
     LEFT JOIN analysis_reports ON analysis_reports.job_id = analysis_jobs.id
     ORDER BY analysis_jobs.created_at DESC LIMIT 100
   `).all();
   return json({ jobs: rows.results });
+}
+
+async function publishAnalysisResult(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const jobId = route.split("/")[2];
+  const body = await request.json();
+  const title = String(body.thesisTitle || "").trim();
+  const plagiarism = Number(body.plagiarismPercent);
+  const aiUse = Number(body.aiUsePercent);
+  if (title.length < 3 || title.length > 240 || !Number.isFinite(plagiarism) || !Number.isFinite(aiUse) || plagiarism < 0 || plagiarism > 100 || aiUse < 0 || aiUse > 100) {
+    return json({ error: "Enter a thesis title and percentages between 0 and 100." }, 400);
+  }
+  const report = await env.DB.prepare(`SELECT analysis_reports.id, analysis_reports.verification_code, analysis_jobs.status, analysis_jobs.user_id
+    FROM analysis_reports JOIN analysis_jobs ON analysis_jobs.id = analysis_reports.job_id WHERE analysis_reports.job_id = ?`).bind(jobId).first();
+  if (!report || report.status !== "completed") return json({ error: "A completed analysis report is required before publication." }, 409);
+  const code = report.verification_code || await uniqueVerificationCode(env);
+  await env.DB.prepare(`UPDATE analysis_reports SET thesis_title = ?, plagiarism_percent = ?, ai_use_percent = ?, verification_code = ?, published_at = ?, published_by = ? WHERE job_id = ?`)
+    .bind(title, plagiarism, aiUse, code, now(), session.id, jobId).run();
+  await notify(env, report.user_id, "thesis_result", "Your thesis result is ready", `${title}: plagiarism ${plagiarism}%, AI use ${aiUse}%.`, "/thesis");
+  await audit(env, session.id, "analysis.result_published", "analysis_job", jobId, { code, plagiarism, aiUse });
+  return listAnalysisAdmin(request, env);
+}
+
+async function uniqueVerificationCode(env) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(8));
+    const value = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+    const code = `HICM-PLG-${value.slice(0, 4)}-${value.slice(4)}`;
+    if (!await env.DB.prepare("SELECT id FROM analysis_reports WHERE verification_code = ?").bind(code).first()) return code;
+  }
+  throw Object.assign(new Error("Could not issue a unique verification code. Try again."), { status: 503 });
 }
 
 async function listNotifications(request, env) {
@@ -1301,8 +1440,9 @@ async function validateImage(file, maxSize) {
 async function listMessages(route, request, env) {
   const channel = decodeURIComponent(route.split("/")[1]);
   if (!CHANNELS.includes(channel)) return json({ error: "Forum channel not found." }, 404);
-  const session = await currentSession(request, env);
-  if (session?.role === "staff" && !session.forum_access) return json({ error: "An administrator must grant this staff account forum access." }, 403);
+  const session = await requireSession(request, env);
+  const accessError = forumAccessError(session, channel);
+  if (accessError) return json({ error: accessError }, 403);
   const after = new URL(request.url).searchParams.get("after");
   const rows = after
     ? await env.DB.prepare(`
@@ -1326,12 +1466,13 @@ async function createMessage(route, request, env) {
   const session = await requireSession(request, env);
   const channel = decodeURIComponent(route.split("/")[1]);
   if (!CHANNELS.includes(channel)) return json({ error: "Forum channel not found." }, 404);
-  if (session.role === "staff" && !session.forum_access) return json({ error: "An administrator must grant this staff account forum access." }, 403);
+  const accessError = forumAccessError(session, channel);
+  if (accessError) return json({ error: accessError }, 403);
   const body = await request.json();
   const messageBody = parseBody(forumTextSchema, body.body);
   const settings = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = ?").bind(channel).first();
-  if (settings?.suspended) return json({ error: settings.suspension_message || "The General Forum is temporarily suspended by administration." }, 423);
-  if (containsLink(messageBody)) return json({ error: "Links are not allowed in the General Forum." }, 400);
+  if (settings?.suspended) return json({ error: settings.suspension_message || `#${channel} is temporarily suspended by administration.` }, 423);
+  if (containsLink(messageBody)) return json({ error: "Links are not allowed in forum channels." }, 400);
   let parent = null;
   if (body.parentMessageId) parent = await env.DB.prepare("SELECT id, user_id, channel FROM messages WHERE id = ? AND deleted_at IS NULL").bind(body.parentMessageId).first();
   if (body.parentMessageId && (!parent || parent.channel !== channel)) return json({ error: "The reply target is not available." }, 400);
@@ -1340,6 +1481,13 @@ async function createMessage(route, request, env) {
     .bind(messageId, channel, session.id, session.name, messageBody, now(), parent?.id || null).run();
   if (parent && parent.user_id !== session.id && parent.user_id !== "system") await notify(env, parent.user_id, "forum_reply", `${session.name} replied to you`, messageBody.slice(0, 180), `/forums?message=${encodeURIComponent(messageId)}`);
   return listMessages(route, request, env);
+}
+
+function forumAccessError(session, channel) {
+  if (session.role === "admin") return null;
+  if (session.role === "staff") return session.forum_access ? null : "An administrator must grant this staff account forum access.";
+  if (channel === "General" || channel === session.department) return null;
+  return "Your student account can only access the General forum and its registered department forum.";
 }
 
 async function reportMessage(route, request, env) {
@@ -1359,6 +1507,77 @@ async function reportMessage(route, request, env) {
 
 function containsLink(value) {
   return /(?:https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|org|net|edu|io|co|cm)\b|<a\s)/i.test(String(value));
+}
+
+async function listDocumentRequests(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role === "staff") return json({ error: "Document requests are managed by administrators." }, 403);
+  const rows = session.role === "admin"
+    ? await env.DB.prepare(`SELECT document_requests.*, users.name AS student_name, users.matricule, users.department
+        FROM document_requests JOIN users ON users.id = document_requests.user_id ORDER BY document_requests.updated_at DESC LIMIT 250`).all()
+    : await env.DB.prepare("SELECT document_requests.*, ? AS student_name, ? AS matricule, ? AS department FROM document_requests WHERE user_id = ? ORDER BY created_at DESC")
+      .bind(session.name, session.matricule, session.department, session.id).all();
+  return json({ requests: rows.results.map((row) => ({
+    ...row,
+    download_url: row.document_key ? `/api/files/document/${encodeURIComponent(row.id)}?download=1` : null,
+  })) });
+}
+
+async function createDocumentRequest(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "student") return json({ error: "Only student accounts can submit document requests." }, 403);
+  const body = await request.json();
+  const requestType = String(body.requestType || "");
+  const details = String(body.details || "").trim().slice(0, 2000);
+  if (!DOCUMENT_TYPES.includes(requestType)) return json({ error: "Select a valid document type." }, 400);
+  if (requestType === "Others" && details.length < 5) return json({ error: "Describe the document you need." }, 400);
+  const duplicate = await env.DB.prepare("SELECT id FROM document_requests WHERE user_id = ? AND request_type = ? AND status IN ('submitted', 'reviewing')").bind(session.id, requestType).first();
+  if (duplicate) return json({ error: "You already have an active request for this document." }, 409);
+  const requestId = id("docreq");
+  await env.DB.prepare("INSERT INTO document_requests (id, user_id, request_type, details, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .bind(requestId, session.id, requestType, details || null, now(), now()).run();
+  await audit(env, session.id, "document_request.created", "document_request", requestId, { requestType });
+  return listDocumentRequests(request, env);
+}
+
+async function reviewDocumentRequest(route, request, env) {
+  const session = await requireAdmin(request, env);
+  const requestId = route.split("/")[1];
+  const current = await env.DB.prepare("SELECT * FROM document_requests WHERE id = ?").bind(requestId).first();
+  if (!current) return json({ error: "Document request not found." }, 404);
+  const contentType = request.headers.get("Content-Type") || "";
+  const form = contentType.includes("multipart/form-data") ? await request.formData() : null;
+  const body = form || await request.json();
+  const getValue = (key) => form ? form.get(key) : body[key];
+  const requestedStatus = String(getValue("status") || current.status);
+  const comment = String(getValue("comment") || "").trim().slice(0, 2000);
+  const file = form?.get("document");
+  if (!["submitted", "reviewing", "ready", "needs_information", "rejected"].includes(requestedStatus)) return json({ error: "Select a valid request status." }, 400);
+  if (file?.name) {
+    const fileError = await validatePdf(file, 15 * 1024 * 1024);
+    if (fileError) return json({ error: fileError }, 400);
+  }
+  const documentKey = file?.name ? await storeUpload(env, file, "student-documents") : current.document_key;
+  const status = file?.name ? "ready" : requestedStatus;
+  try {
+    await env.DB.prepare(`UPDATE document_requests SET status = ?, admin_comment = ?, document_key = ?, document_name = ?, document_mime = ?, document_size = ?, handled_by = ?, updated_at = ?, completed_at = CASE WHEN ? = 'ready' THEN ? ELSE NULL END WHERE id = ?`)
+      .bind(status, comment || null, documentKey || null, file?.name || current.document_name, file?.type || current.document_mime, file?.size || current.document_size, session.id, now(), status, now(), requestId).run();
+  } catch (error) {
+    if (file?.name && env.UPLOADS) await env.UPLOADS.delete(documentKey);
+    throw error;
+  }
+  if (file?.name && current.document_key && current.document_key !== documentKey && env.UPLOADS) await env.UPLOADS.delete(current.document_key);
+  const title = status === "ready" ? `${current.request_type} is ready` : `${current.request_type} request updated`;
+  await notify(env, current.user_id, "document_request", title, comment || `Your request status is now ${status.replace("_", " ")}.`, "/documents");
+  await audit(env, session.id, "document_request.reviewed", "document_request", requestId, { status, attached: Boolean(file?.name) });
+  return listDocumentRequests(request, env);
+}
+
+async function validatePdf(file, maxSize) {
+  if (file.size > maxSize) return "PDF files must be 15 MB or smaller.";
+  if (!String(file.name || "").toLowerCase().endsWith(".pdf")) return "Attach a PDF document.";
+  const signature = new TextDecoder().decode(await file.slice(0, 5).arrayBuffer());
+  return signature === "%PDF-" ? null : "The uploaded file is not a valid PDF.";
 }
 
 async function getThesis(request, env) {
@@ -1470,7 +1689,9 @@ async function readAnalysisJob(env, jobId) {
   const job = await env.DB.prepare(`
     SELECT analysis_jobs.*, analysis_documents.original_name, analysis_documents.word_count,
       analysis_reports.similarity_percent, analysis_reports.matched_shingles, analysis_reports.total_shingles,
-      analysis_reports.coverage_note, analysis_reports.recommendations_json
+      analysis_reports.coverage_note, analysis_reports.recommendations_json,
+      analysis_reports.thesis_title, analysis_reports.plagiarism_percent, analysis_reports.ai_use_percent,
+      analysis_reports.verification_code, analysis_reports.published_at
     FROM analysis_jobs JOIN analysis_documents ON analysis_documents.id = analysis_jobs.document_id
     LEFT JOIN analysis_reports ON analysis_reports.job_id = analysis_jobs.id
     WHERE analysis_jobs.id = ?
@@ -1499,8 +1720,30 @@ async function readAnalysisJob(env, jobId) {
       coverage: job.coverage_note,
       recommendations: JSON.parse(job.recommendations_json || "[]"),
       matches: matches.results.map((match) => ({ sourceName: match.source_name, similarity: match.similarity_percent, excerpt: match.excerpt })),
+      officialResult: job.published_at ? {
+        thesisTitle: job.thesis_title,
+        plagiarismPercent: job.plagiarism_percent,
+        aiUsePercent: job.ai_use_percent,
+        verificationCode: job.verification_code,
+        publishedAt: job.published_at,
+      } : null,
     } : null,
   };
+}
+
+async function verifyThesisResult(request, env) {
+  await requireStaff(request, env);
+  const code = String(new URL(request.url).searchParams.get("code") || "").trim().toUpperCase();
+  if (!code) return json({ error: "Enter a thesis verification code." }, 400);
+  const result = await env.DB.prepare(`SELECT analysis_reports.thesis_title, analysis_reports.plagiarism_percent,
+      analysis_reports.ai_use_percent, analysis_reports.verification_code, analysis_reports.published_at,
+      users.name AS student_name, users.matricule, users.department
+    FROM analysis_reports
+    JOIN analysis_jobs ON analysis_jobs.id = analysis_reports.job_id
+    JOIN users ON users.id = analysis_jobs.user_id
+    WHERE analysis_reports.verification_code = ? AND analysis_reports.published_at IS NOT NULL`).bind(code).first();
+  if (!result) return json({ error: "No published thesis result matches this verification code." }, 404);
+  return json({ result });
 }
 
 async function readFile(route, request, env) {
@@ -1508,7 +1751,14 @@ async function readFile(route, request, env) {
   if (!env.UPLOADS) return json({ error: "Cloudflare R2 binding UPLOADS is not configured." }, 500);
   let key = decodeURIComponent(route.replace(/^files\//, ""));
   let dispositionName = null;
-  if (key.startsWith("note/")) {
+  if (key.startsWith("document/")) {
+    const requestId = key.slice("document/".length);
+    const documentRequest = await env.DB.prepare("SELECT * FROM document_requests WHERE id = ?").bind(requestId).first();
+    if (!documentRequest?.document_key) return json({ error: "Document not found." }, 404);
+    if (session.role !== "admin" && documentRequest.user_id !== session.id) return json({ error: "You do not have permission to download this document." }, 403);
+    key = documentRequest.document_key;
+    dispositionName = documentRequest.document_name || "HICM-document.pdf";
+  } else if (key.startsWith("note/")) {
     const noteId = key.slice(5);
     const note = await env.DB.prepare("SELECT * FROM lecture_notes WHERE id = ? AND deleted_at IS NULL").bind(noteId).first();
     if (!note) return json({ error: "File not found." }, 404);
