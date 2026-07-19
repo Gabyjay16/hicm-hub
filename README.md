@@ -1,92 +1,51 @@
-# HICM HUB
+# HICM Portal
 
-HICM HUB is a production-ready university portal built with React, Vite, Tailwind CSS, React Router, Lucide icons, and Cloudflare Pages Functions.
+HICM Portal is a mobile-first university platform deployed on Cloudflare Pages. React and Vite provide the frontend; Pages Functions provide the server API; D1 stores application records and server sessions; private R2 stores lecture notes, evidence, payment proofs, and analysis uploads.
 
-The application does not use LocalStorage for persistence. Sessions and application data are stored through Cloudflare-native services:
+No credentials, votes, application records, or session authority are stored in LocalStorage. The Groq API key is a Cloudflare encrypted secret and is never included in the browser build.
 
-- Cloudflare D1 for users, sessions, announcements, complaints, quizzes, votes, lost/found records, forum messages, and thesis approval state.
-- Cloudflare R2 for complaint proof files, payment screenshots, lecture notes, and thesis uploads.
-- HttpOnly cookies for active user sessions.
+## Current modules
 
-## Features
+- Role-aware student and staff portal dashboards.
+- Student registration and name-plus-matricule login.
+- Staff access-code registration with salted, server-peppered password authentication.
+- Private lecture-note publication and authenticated student downloads.
+- Groq-assisted MCQ draft generation, staff publication, timed student execution, and server-side scoring.
+- Announcements, confidential complaints, voting, Lost & Found, General Forum, and paid Plagiarism Test workflow.
+- D1-backed records, R2-backed uploads, HttpOnly cookies, audit events, and server-side authorization checks.
 
-- Sticky responsive navigation with Academics, Student Services, and Campus Life dropdowns.
-- Login/Register modal with separate Student and Staff tabs.
-- Student/Staff testing role switch persisted in the server session.
-- Announcements board with staff posting.
-- Complaints desk with confidential sexual harassment category and proof upload.
-- AI quiz generation simulation and timed student quiz execution with auto-submit.
-- Student voting with one vote per matricule.
-- Lost & Found visual feed with LOST/FOUND filters.
-- Categorized chat forums for General, Level-200, Level-300, and Level-400.
-- Premium thesis workflow with payment screenshot approval and simulated analysis dashboard.
+Student name-plus-matricule login follows the requested initial workflow but is weaker than a private password or OTP. A future migration should add student passwords or phone OTP while retaining matricule as the account identifier.
 
-## Cloudflare Setup
-
-Install dependencies:
+## Local setup
 
 ```bash
 npm install
-```
-
-Create Cloudflare resources:
-
-```bash
-npm run cf:db:create
-npm run cf:r2:create
-```
-
-Copy the generated D1 database id into `wrangler.toml`:
-
-```toml
-[[d1_databases]]
-binding = "DB"
-database_name = "hicm-hub-db"
-database_id = "YOUR_REAL_D1_DATABASE_ID"
-```
-
-Apply migrations:
-
-```bash
-npm run cf:db:migrate
-```
-
-Run locally with Cloudflare bindings:
-
-```bash
-npx wrangler pages dev dist --d1 DB=hicm-hub-db --r2 UPLOADS=hicm-hub-uploads
-```
-
-For normal frontend development:
-
-```bash
-npm run dev
-```
-
-Build for Cloudflare Pages:
-
-```bash
 npm run build
+npx wrangler d1 migrations apply hicm-hub-db --local
+npx wrangler pages dev dist
 ```
 
-Cloudflare Pages settings:
+Copy `.dev.vars.example` to `.dev.vars` for local secrets. Never commit `.dev.vars`.
+
+## Production
 
 - Build command: `npm run build`
-- Build output directory: `dist`
+- Output directory: `dist`
 - D1 binding: `DB`
 - R2 binding: `UPLOADS`
+- Production URL: <https://hicm-hub.pages.dev>
 
-## GitHub Deployment Flow
+See `CLOUDFLARE_SETUP.md` for bindings and secrets. All schema changes are versioned in `migrations/`.
 
-Create a GitHub repository, commit these files, then connect the repository in Cloudflare Pages.
+## Groq
 
-```bash
-git init
-git add .
-git commit -m "Build HICM HUB Cloudflare app"
-git branch -M main
-git remote add origin https://github.com/YOUR_USER/hicm-hub.git
-git push -u origin main
-```
+The browser calls only authenticated `/api` routes. The Pages Function calls Groq using `GROQ_API_KEY`; generated MCQs are validated, saved as drafts, and require staff publication. If Groq is not configured, development generation uses a clearly identified fallback question set.
 
-Cloudflare will build every push to `main`.
+## Security notes
+
+- Staff API checks use the account role from D1, never the selected UI view.
+- Logout deletes the server session and expires the HttpOnly cookie.
+- Private R2 object keys are not returned to students.
+- Student quiz payloads omit correct answers before submission.
+- Forum messages reject common URL forms on both client and server.
+- Originality percentages are never invented by an LLM; the current report explicitly states its limited internal coverage.
