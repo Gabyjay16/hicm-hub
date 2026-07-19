@@ -12,6 +12,7 @@ test("administrator can inspect metrics and issue access codes", async ({ page }
     if (path.endsWith("users")) return route.fulfill({ json: { users: [] } });
     if (path.endsWith("staff-codes")) return route.fulfill({ json: { codes: [] } });
     if (path.endsWith("forum/reports")) return route.fulfill({ json: { reports: [] } });
+    if (path.endsWith("forum/settings")) return route.fulfill({ json: { settings: { channel: "General", suspended: 0, images_enabled: 0, audio_enabled: 0 } } });
     if (path.endsWith("analysis")) return route.fulfill({ json: { jobs: [] } });
     return route.fulfill({ json: { logs: [] } });
   });
