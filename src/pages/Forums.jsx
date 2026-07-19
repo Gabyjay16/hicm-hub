@@ -6,8 +6,8 @@ import { api, postJson } from "../utils/api";
 export const forumLinkPattern = /(?:https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|org|net|edu|io|co|cm)\b|<a\s)/i;
 
 export default function Forums() {
-  const { channels, requireAuth, setToast, user } = useApp();
-  const availableChannels = channels.length ? channels : ["General", "Level-200 (Year 1)", "Level-300 (Year 2)", "Level-400 (Year 3)"];
+  const { requireAuth, setToast, user } = useApp();
+  const availableChannels = ["General"];
   const [channel, setChannel] = useState("General");
   const [messages, setMessages] = useState([]);
   const [settings, setSettings] = useState({ links_enabled: 0 });
@@ -74,7 +74,7 @@ export default function Forums() {
             <div ref={endRef} />
           </div>
           {replyTo && <div className="flex items-center gap-3 border-t border-slate-200 bg-teal-50 px-4 py-2 text-xs text-teal-950"><Reply size={14} /><span className="min-w-0 flex-1 truncate">Replying to <b>{replyTo.author}</b>: {replyTo.body}</span><button onClick={() => setReplyTo(null)} aria-label="Cancel reply"><X size={16} /></button></div>}
-          <form onSubmit={submit} className="flex gap-2 border-t border-slate-200 bg-white p-4"><label className="min-w-0 flex-1"><span className="sr-only">Message {channel}</span><input className="field py-3" value={body} maxLength={1000} onChange={(event) => setBody(event.target.value)} placeholder={replyTo ? `Reply to ${replyTo.author}` : "Write a message"} /></label><button className="btn-primary h-11 w-11 px-0" aria-label="Send message"><Send size={18} /></button></form>
+          {settings.suspended ? <div role="status" className="border-t border-amber-200 bg-amber-50 p-4 text-center text-sm font-bold text-amber-950">{settings.suspension_message || "The General Forum is temporarily suspended by administration."}</div> : <form onSubmit={submit} className="flex gap-2 border-t border-slate-200 bg-white p-4"><label className="min-w-0 flex-1"><span className="sr-only">Message {channel}</span><input className="field py-3" value={body} maxLength={1000} onChange={(event) => setBody(event.target.value)} placeholder={replyTo ? `Reply to ${replyTo.author}` : "Write a message"} /></label><button className="btn-primary h-11 w-11 px-0" aria-label="Send message"><Send size={18} /></button></form>}
         </section>
       </div>
     </main>
