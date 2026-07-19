@@ -10,6 +10,7 @@ export function AppProvider({ children }) {
   const [authOpen, setAuthOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState("");
+  const [unreadCount, setUnreadCount] = useState(0);
 
   async function refreshSession() {
     const data = await api("/session");
@@ -23,6 +24,22 @@ export function AppProvider({ children }) {
   useEffect(() => {
     refreshSession().catch(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!session) {
+      setUnreadCount(0);
+      return undefined;
+    }
+    refreshNotifications().catch(() => {});
+    const timer = setInterval(() => refreshNotifications().catch(() => {}), 30000);
+    return () => clearInterval(timer);
+  }, [session?.user?.id]);
+
+  async function refreshNotifications() {
+    const data = await api("/notifications");
+    setUnreadCount(data.unread || 0);
+    return data;
+  }
 
   async function authenticate(payload) {
     const data = await postJson("/auth", payload);
@@ -70,9 +87,11 @@ export function AppProvider({ children }) {
     toggleRole,
     requireAuth,
     refreshSession,
+    refreshNotifications,
+    unreadCount,
     toast,
     setToast,
-  }), [session, candidates, channels, loading, authOpen, toast]);
+  }), [session, candidates, channels, loading, authOpen, toast, unreadCount]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
