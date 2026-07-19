@@ -10,3 +10,5 @@ dist/
 npm-debug.log*
 work/
 outputs/
+playwright-report/
+test-results/
