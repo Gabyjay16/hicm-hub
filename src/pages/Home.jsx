@@ -1,86 +1,101 @@
-import { ArrowRight, Bell, FileCheck2, MessageCircle, Search, Vote } from "lucide-react";
+import {
+  Bell, BookOpen, Building2, CheckSquare, ClipboardCheck, FileSearch, GraduationCap,
+  Landmark, MessageSquareText, Search, UploadCloud, UsersRound, Vote,
+} from "lucide-react";
 import { Link } from "react-router-dom";
+import PortalSection, { PortalRow } from "../components/PortalSection";
 import { useApp } from "../context/AppContext";
 
-const modules = [
-  { title: "Announcements", text: "Official notices from academic and administrative staff.", to: "/announcements", icon: Bell, color: "bg-teal-700" },
-  { title: "Complaints Desk", text: "Submit and track academic, bio-data, or confidential complaints.", to: "/complaints", icon: FileCheck2, color: "bg-rose-700" },
-  { title: "AI Quiz Platform", text: "Staff generate MCQs; students take timed tests with auto-submit.", to: "/quiz", icon: Search, color: "bg-indigo-700" },
-  { title: "Student Voting", text: "One vote per matricule with immediate confirmation.", to: "/voting", icon: Vote, color: "bg-amber-600" },
-  { title: "Chat Forums", text: "Level-based channels for useful academic discussion.", to: "/forums", icon: MessageCircle, color: "bg-emerald-700" },
-  { title: "Thesis Analysis", text: "Premium admin-approved plagiarism and AI writing insights.", to: "/thesis", icon: FileCheck2, color: "bg-slate-800" },
-];
-
 export default function Home() {
-  const { session, viewRole, setAuthOpen } = useApp();
+  const { session, user, viewRole, setAuthOpen } = useApp();
+
+  if (!session) return <Welcome setAuthOpen={setAuthOpen} />;
+  return viewRole === "staff" ? <StaffHome name={user?.name} /> : <StudentHome name={user?.name} />;
+}
+
+function StudentHome({ name }) {
+  const firstName = name?.split(" ")[0] || "Student";
 
   return (
-    <div>
-      <section className="border-b border-slate-200 bg-white">
-        <div className="page-shell grid gap-10 py-12 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
-          <div>
-            <p className="mb-3 text-xs font-black uppercase tracking-wider text-teal-700">HICM University digital campus</p>
-            <h1 className="max-w-4xl text-4xl font-black leading-tight text-slate-950 sm:text-5xl">
-              Academic tools, student services, and campus life in one functional hub.
-            </h1>
-            <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">
-              HICM HUB runs as a Cloudflare Pages application with server-side data, secure session cookies, D1 records, and R2-backed file uploads.
-            </p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              {session ? (
-                <Link to="/announcements" className="btn-primary">Open Dashboard <ArrowRight size={18} /></Link>
-              ) : (
-                <button onClick={() => setAuthOpen(true)} className="btn-primary">Login / Register <ArrowRight size={18} /></button>
-              )}
-              <span className="inline-flex items-center rounded-md bg-amber-50 px-4 py-2 text-sm font-black text-amber-900">
-                Current mode: {viewRole === "staff" ? "Staff/Admin" : "Student"}
-              </span>
-            </div>
-          </div>
-          <div className="grid gap-3 rounded-lg border border-slate-200 bg-stone-50 p-4">
-            <div className="rounded-lg bg-teal-700 p-6 text-white">
-              <p className="text-sm font-bold uppercase text-teal-100">Live Portal Snapshot</p>
-              <p className="mt-6 text-3xl font-black">8 connected services</p>
-              <p className="mt-2 text-teal-50">Built for students, lecturers, and administrators.</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Metric label="Storage" value="D1 + R2" />
-              <Metric label="Hosting" value="Pages" />
-              <Metric label="Auth" value="Cookie" />
-              <Metric label="Build" value="/dist" />
-            </div>
-          </div>
-        </div>
-      </section>
+    <main className="portal-canvas">
+      <div className="portal-frame">
+        <div className="portal-welcome">Welcome back, {firstName}!</div>
+        <Link to="/announcements" className="announcement-strip">
+          <Bell size={22} className="text-teal-700" />
+          <span className="min-w-0 flex-1 truncate">Exam and campus updates are available in Announcements.</span>
+          <span className="font-bold text-teal-800">View all</span>
+        </Link>
 
-      <section className="page-shell">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {modules.map((module) => {
-            const Icon = module.icon;
-            return (
-              <Link key={module.title} to={module.to} className="panel group p-5 transition hover:-translate-y-1 hover:shadow-soft">
-                <span className={`mb-5 grid h-12 w-12 place-items-center rounded-lg text-white ${module.color}`}>
-                  <Icon size={23} />
-                </span>
-                <h2 className="text-lg font-black text-slate-950">{module.title}</h2>
-                <p className="mt-2 min-h-12 text-sm leading-6 text-slate-600">{module.text}</p>
-                <span className="mt-5 inline-flex items-center gap-2 text-sm font-black text-teal-700">
-                  Open <ArrowRight size={16} className="transition group-hover:translate-x-1" />
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      </section>
-    </div>
+        <PortalSection icon={GraduationCap} title="Academics" defaultOpen>
+          <PortalRow icon={ClipboardCheck} label="Evaluation" to="/quiz" />
+          <PortalRow icon={BookOpen} label="Lecture Notes" to="/quiz?tab=notes" />
+          <PortalRow icon={FileSearch} label="Plagiarism Test" to="/thesis" />
+        </PortalSection>
+
+        <PortalSection icon={UsersRound} title="Student Services">
+          <PortalRow icon={CheckSquare} label="Complaints Desk" to="/complaints" />
+          <PortalRow icon={Search} label="Lost & Found" to="/lost-found" />
+        </PortalSection>
+
+        <PortalSection icon={Landmark} title="Campus Life">
+          <PortalRow icon={Bell} label="Announcements" to="/announcements" />
+          <PortalRow icon={Vote} label="Student Voting" to="/voting" />
+        </PortalSection>
+
+        <Link to="/forums" className="portal-standalone-row">
+          <span className="portal-icon-ring"><MessageSquareText size={24} /></span>
+          <span className="flex-1 text-lg font-extrabold text-navy sm:text-xl">General Forum</span>
+          <span className="portal-count">1</span>
+          <span aria-hidden="true" className="text-2xl font-light">›</span>
+        </Link>
+      </div>
+    </main>
   );
 }
 
-function Metric({ label, value }) {
+function StaffHome({ name }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <p className="text-xs font-black uppercase text-slate-500">{label}</p>
-      <p className="mt-2 text-lg font-black text-slate-950">{value}</p>
-    </div>
+    <main className="portal-canvas">
+      <div className="portal-frame">
+        <div className="portal-page-title">Academic Tools</div>
+        <PortalSection icon={UploadCloud} title="Upload Lecture Notes" defaultOpen>
+          <div className="px-4 pb-5 sm:px-6">
+            <p className="mb-4 text-sm leading-6 text-slate-600">Publish a PDF or DOCX privately for the right department, level, and semester.</p>
+            <Link to="/quiz?tab=notes" className="btn-primary w-full"><UploadCloud size={18} /> Open lecture note uploader</Link>
+          </div>
+        </PortalSection>
+        <PortalSection icon={ClipboardCheck} title="Create MCQ Evaluation">
+          <div className="px-4 pb-5 sm:px-6">
+            <p className="mb-4 text-sm leading-6 text-slate-600">Create a course evaluation manually or generate an editable draft with Groq.</p>
+            <Link to="/quiz?tab=evaluation" className="btn-primary w-full"><ClipboardCheck size={18} /> Open evaluation builder</Link>
+          </div>
+        </PortalSection>
+        <PortalSection icon={BookOpen} title="My Uploaded Notes">
+          <div className="px-4 pb-5 sm:px-6">
+            <div className="recent-upload">
+              <BookOpen size={24} />
+              <div className="min-w-0 flex-1"><p className="font-bold text-navy">No recent upload</p><p className="text-sm text-slate-500">Your published notes will appear here.</p></div>
+            </div>
+          </div>
+        </PortalSection>
+        <div className="border-t border-slate-200 px-5 py-4 text-sm text-slate-500">Signed in as {name}</div>
+      </div>
+    </main>
+  );
+}
+
+function Welcome({ setAuthOpen }) {
+  return (
+    <main className="portal-canvas">
+      <section className="portal-frame grid min-h-[620px] place-items-center px-6 py-12 text-center">
+        <div className="max-w-xl">
+          <span className="mx-auto grid h-20 w-20 place-items-center rounded-sm bg-navy text-white"><Building2 size={42} /></span>
+          <p className="mt-7 text-sm font-extrabold uppercase text-teal-700">Higher Institute of Commerce and Management</p>
+          <h1 className="mt-3 font-serif text-4xl font-bold text-navy sm:text-5xl">HICM Portal</h1>
+          <p className="mx-auto mt-5 max-w-lg text-base leading-7 text-slate-600">Your secure place for academic tools, student services, campus notices, and the General Forum.</p>
+          <button onClick={() => setAuthOpen(true)} className="btn-primary mt-7 px-7 py-3">Login or register</button>
+        </div>
+      </section>
+    </main>
   );
 }
