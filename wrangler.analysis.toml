@@ -1,0 +1,20 @@
+name = "hicm-hub-analysis"
+main = "workers/analysis-worker.js"
+compatibility_date = "2026-07-13"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hicm-hub-db"
+database_id = "bc9a2b59-e792-4eb4-8ce5-6ef3b348f945"
+
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "hicm-hub-uploads"
+
+[[queues.consumers]]
+queue = "hicm-analysis"
+max_batch_size = 4
+max_batch_timeout = 5
+max_retries = 3
+
