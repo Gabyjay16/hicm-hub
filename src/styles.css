@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply bg-stone-50 text-slate-950 antialiased;
+    @apply bg-[#f7f8fa] text-slate-950 antialiased;
   }
 
   button, input, select, textarea {
@@ -39,5 +39,87 @@
 
   .badge {
     @apply inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold;
+  }
+
+  .portal-canvas {
+    @apply min-h-[calc(100vh-76px)] bg-[#f7f8fa] py-0 sm:px-5 sm:py-7;
+  }
+
+  .portal-frame {
+    @apply mx-auto w-full max-w-4xl overflow-hidden border-x border-b border-slate-200 bg-white sm:rounded-md sm:border-t;
+  }
+
+  .portal-welcome,
+  .portal-page-title {
+    @apply border-b border-slate-200 px-5 py-5 text-xl font-semibold text-navy sm:px-7 sm:text-2xl;
+  }
+
+  .portal-page-title {
+    @apply py-4 font-extrabold;
+  }
+
+  .announcement-strip {
+    @apply flex min-h-16 items-center gap-4 border-b border-slate-200 px-5 text-sm text-navy transition hover:bg-teal-50 sm:px-7 sm:text-base;
+  }
+
+  .portal-section {
+    @apply border-b border-slate-200 bg-white;
+  }
+
+  .portal-section-trigger,
+  .portal-standalone-row {
+    @apply flex min-h-[94px] w-full items-center gap-4 px-5 text-navy transition hover:bg-slate-50 sm:px-7;
+  }
+
+  .portal-icon-ring {
+    @apply grid h-12 w-12 shrink-0 place-items-center rounded-full border-2 border-teal-700 text-teal-700;
+  }
+
+  .portal-section-content {
+    @apply ml-[30px] border-l-[3px] border-teal-700 pl-5 pr-5 sm:ml-[31px] sm:pl-6 sm:pr-7;
+  }
+
+  .portal-row {
+    @apply flex min-h-[82px] items-center gap-5 border-b border-slate-200 px-4 text-navy transition last:border-b-0 hover:bg-teal-50;
+  }
+
+  .portal-count {
+    @apply grid h-8 min-w-8 place-items-center rounded-full bg-teal-700 px-2 text-sm font-bold text-white;
+  }
+
+  .recent-upload {
+    @apply flex items-center gap-4 rounded-md border border-slate-200 p-4 text-navy;
+  }
+
+  .nav-menu-action {
+    @apply flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm font-semibold text-navy hover:bg-teal-50;
+  }
+
+  .mobile-bottom-nav {
+    @apply fixed inset-x-0 bottom-0 z-50 grid h-[72px] grid-cols-4 border-t border-slate-200 bg-white lg:hidden;
+  }
+
+  .mobile-nav-item {
+    @apply flex min-w-0 flex-col items-center justify-center gap-1 px-1 text-[11px] font-semibold text-navy;
+  }
+
+  .mobile-nav-item.is-active {
+    @apply text-teal-700;
+  }
+
+  .academic-form {
+    @apply grid gap-4 px-5 pb-6 sm:px-6;
+  }
+
+  .upload-dropzone {
+    @apply flex min-h-28 cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-slate-400 px-4 py-5 text-center text-teal-700 transition hover:border-teal-700 hover:bg-teal-50 focus-within:ring-2 focus-within:ring-teal-200;
+  }
+
+  .answer-option {
+    @apply flex cursor-pointer items-center gap-3 rounded-md border border-slate-200 p-3 text-sm leading-6 transition hover:border-teal-700;
+  }
+
+  .answer-option.is-selected {
+    @apply border-teal-700 bg-teal-50 text-navy;
   }
 }
