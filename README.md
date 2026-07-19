@@ -13,7 +13,10 @@ No credentials, votes, application records, or session authority are stored in L
 - Administrator control plane for accounts, staff permissions, access codes, matricule verification, document requests, reports, analysis jobs, and audit records.
 - Private lecture-note publication, a searchable student library, authenticated downloads, replacement, unpublishing, and deletion.
 - Groq-assisted MCQ draft generation, staff publication, timed student execution, and server-side scoring.
-- Announcements, persistent notifications, configurable Mark/Bio-Data/Other complaints, voting, Lost & Found, and department-scoped forums that administrators can suspend per channel.
+- Announcements, persistent notifications, configurable Mark/Bio-Data/Other complaints, voting, and department-scoped forums that administrators can suspend per channel.
+- Student forum usernames with administrator-only real identity disclosure, private R2 pictures and voice notes, and optional per-recipient view-once delivery.
+- Student-created Lost & Found posts with pictures, owner-controlled found status, and automatic deletion one hour after resolution.
+- Installable PWA metadata, offline app-shell support, Chromium install prompts, and iPhone/iPad home-screen guidance.
 - Student document requests with admin comments and private PDF delivery through authenticated R2 downloads.
 - Paid thesis workflow with private R2 files, queued PDF/DOCX extraction, deterministic internal-corpus matching, official admin-published percentages, and staff verification codes.
 - D1-backed records, R2-backed uploads, HttpOnly cookies, audit events, and server-side authorization checks.

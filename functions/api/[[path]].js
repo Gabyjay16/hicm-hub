@@ -1,4 +1,5 @@
 import { processAnalysisJob } from "../lib/analysis-job.js";
+import { cleanupExpiredLostItems } from "../lib/lost-found-cleanup.js";
 import { announcementSchema, authSchema, complaintSchema, departments, evaluationSchema, forumTextSchema, lostFoundSchema, parseBody } from "../../shared/schemas.ts";
 
 const DEPARTMENTS = [...departments];
@@ -148,8 +149,10 @@ export async function onRequest(context) {
 
     if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "GET") return await listMessages(route, request, env);
     if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "POST") return await createMessage(route, request, env);
+    if (route === "forums/profile" && request.method === "PATCH") return await updateForumProfile(request, env);
     if (/^forums\/messages\/[^/]+\/report$/.test(route) && request.method === "POST") return await reportMessage(route, request, env);
     if (/^forums\/messages\/[^/]+\/media$/.test(route) && request.method === "GET") return await readForumMedia(route, request, env);
+    if (/^forums\/messages\/[^/]+\/media$/.test(route) && request.method === "POST") return await readForumMedia(route, request, env, true);
 
     if (route === "document-requests" && request.method === "GET") return await listDocumentRequests(request, env);
     if (route === "document-requests" && request.method === "POST") return await createDocumentRequest(request, env);
@@ -267,12 +270,6 @@ async function seedData(db) {
     }
   }
 
-  for (const channel of CHANNELS) {
-    const messageCount = await db.prepare("SELECT COUNT(*) AS total FROM messages WHERE channel = ?").bind(channel).first();
-    if (!Number(messageCount.total)) {
-      await db.prepare("INSERT INTO messages (id, channel, user_id, author, body, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id("msg"), channel, "system", "HICM Moderator", `Welcome to #${channel}. Keep it useful, respectful, and academic.`, now()).run();
-    }
-  }
 }
 
 async function count(db, table) {
@@ -348,6 +345,7 @@ function presentSession(session) {
       matricule: session.matricule,
       phone: session.phone,
       department: session.department,
+      forumAlias: session.forum_alias,
       forumAccess: session.role === "admin" || Boolean(session.forum_access),
       moderationAccess: session.role === "admin" || Boolean(session.moderation_access),
     },
@@ -736,9 +734,11 @@ async function getForumSettings(request, env) {
 async function listForumReports(request, env) {
   await requireAdmin(request, env);
   const rows = await env.DB.prepare(`
-    SELECT forum_reports.*, messages.body, messages.author, messages.channel, users.name AS reporter_name
+    SELECT forum_reports.*, messages.body, messages.author, messages.channel, messages.message_type,
+      users.name AS reporter_name, message_users.name AS author_real_name
     FROM forum_reports JOIN messages ON messages.id = forum_reports.message_id
     JOIN users ON users.id = forum_reports.reporter_id
+    LEFT JOIN users message_users ON message_users.id = messages.user_id
     ORDER BY forum_reports.created_at DESC LIMIT 100
   `).all();
   return json({ reports: rows.results });
@@ -1375,11 +1375,14 @@ async function castElectionVote(route, request, env) {
 
 async function listLostFound(request, env) {
   const session = await requireSession(request, env);
+  await cleanupExpiredLostItems(env);
   const url = new URL(request.url);
   const type = String(url.searchParams.get("type") || "");
   const query = `%${String(url.searchParams.get("q") || "").trim()}%`;
   const rows = await env.DB.prepare(`SELECT lost_items.*, users.name AS owner_name FROM lost_items LEFT JOIN users ON users.id = lost_items.user_id
-    WHERE deleted_at IS NULL AND (? = 1 OR status <> 'removed') AND (? = '' OR type = ?) AND (title LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE OR location LIKE ? COLLATE NOCASE)
+    WHERE deleted_at IS NULL AND (? = 1 OR status <> 'removed')
+      AND (expires_at IS NULL OR datetime(expires_at) > CURRENT_TIMESTAMP)
+      AND (? = '' OR type = ?) AND (title LIKE ? COLLATE NOCASE OR COALESCE(description, '') LIKE ? COLLATE NOCASE OR location LIKE ? COLLATE NOCASE)
     ORDER BY created_at DESC LIMIT 100`).bind(session.role === "admin" ? 1 : 0, type, type, query, query, query).all();
   return json({ items: rows.results.map((item) => ({ ...item, image_url: item.image_key ? `/api/files/${encodeURIComponent(item.image_key)}` : item.image_url })) });
 }
@@ -1411,7 +1414,13 @@ async function updateLostFound(route, request, env) {
   if (session.role !== "admin" && post.user_id !== session.id) return json({ error: "You do not own this post." }, 403);
   const body = await request.json();
   const status = ["active", "resolved", "removed"].includes(body.status) ? body.status : post.status;
-  await env.DB.prepare("UPDATE lost_items SET status = ?, updated_at = ? WHERE id = ?").bind(status, now(), postId).run();
+  if (session.role !== "admin" && status === "resolved" && post.type !== "LOST") return json({ error: "Only a missing item can be marked as found." }, 400);
+  const timestamp = now();
+  const resolvedAt = status === "resolved" ? timestamp : null;
+  const expiresAt = status === "resolved" ? new Date(Date.now() + 60 * 60 * 1000).toISOString() : null;
+  await env.DB.prepare("UPDATE lost_items SET status = ?, resolved_at = ?, expires_at = ?, deleted_at = CASE WHEN ? = 'removed' THEN ? ELSE deleted_at END, updated_at = ? WHERE id = ?")
+    .bind(status, resolvedAt, expiresAt, status, timestamp, timestamp, postId).run();
+  if (status === "removed" && post.image_key && env.UPLOADS) await env.UPLOADS.delete(post.image_key);
   await audit(env, session.id, `lost_found.${status}`, "lost_found", postId);
   return listLostFound(request, env);
 }
@@ -1437,6 +1446,21 @@ async function validateImage(file, maxSize) {
   const webp = String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP";
   return jpeg || png || webp ? null : "The image contents do not match its extension.";
 }
+
+async function validateAudio(file, maxSize) {
+  if (file.size > maxSize) return "Voice note exceeds the configured size limit.";
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  if (!["mp3", "m4a", "ogg", "wav", "webm"].includes(extension)) return "Use an MP3, M4A, OGG, WAV, or WebM voice note.";
+  const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  const ascii = String.fromCharCode(...bytes);
+  const mp3 = ascii.startsWith("ID3") || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);
+  const wav = ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WAVE";
+  const ogg = ascii.startsWith("OggS");
+  const webm = bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+  const m4a = ascii.slice(4, 8) === "ftyp";
+  return mp3 || wav || ogg || webm || m4a ? null : "The voice note contents do not match its extension.";
+}
+
 async function listMessages(route, request, env) {
   const channel = decodeURIComponent(route.split("/")[1]);
   if (!CHANNELS.includes(channel)) return json({ error: "Forum channel not found." }, 404);
@@ -1446,20 +1470,32 @@ async function listMessages(route, request, env) {
   const after = new URL(request.url).searchParams.get("after");
   const rows = after
     ? await env.DB.prepare(`
-        SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body
+        SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body,
+          authors.name AS real_author_name, media_views.viewed_at AS media_viewed_at
         FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id
+        LEFT JOIN users authors ON authors.id = messages.user_id
+        LEFT JOIN forum_media_views media_views ON media_views.message_id = messages.id AND media_views.user_id = ?
         WHERE messages.channel = ? AND messages.created_at > ? AND messages.deleted_at IS NULL
         ORDER BY messages.created_at ASC LIMIT 100
-      `).bind(channel, after).all()
+      `).bind(session.id, channel, after).all()
     : await env.DB.prepare(`
-        SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body
+        SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body,
+          authors.name AS real_author_name, media_views.viewed_at AS media_viewed_at
         FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id
+        LEFT JOIN users authors ON authors.id = messages.user_id
+        LEFT JOIN forum_media_views media_views ON media_views.message_id = messages.id AND media_views.user_id = ?
         WHERE messages.channel = ? AND messages.deleted_at IS NULL
         ORDER BY messages.created_at DESC LIMIT 100
-      `).bind(channel).all();
-  const messages = after ? rows.results : rows.results.reverse();
+      `).bind(session.id, channel).all();
+  const source = after ? rows.results : rows.results.reverse();
+  const messages = source.map((message) => presentForumMessage(message, session));
   const settings = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = ?").bind(channel).first();
-  return json({ channel, messages, settings: settings || { links_enabled: 0, images_enabled: 0, audio_enabled: 0 } });
+  return json({
+    channel,
+    messages,
+    settings: settings || { links_enabled: 0, images_enabled: 1, audio_enabled: 1 },
+    profile: { alias: session.forum_alias || "", usingAlias: session.role === "student" && Boolean(session.forum_alias) },
+  });
 }
 
 async function createMessage(route, request, env) {
@@ -1468,19 +1504,123 @@ async function createMessage(route, request, env) {
   if (!CHANNELS.includes(channel)) return json({ error: "Forum channel not found." }, 404);
   const accessError = forumAccessError(session, channel);
   if (accessError) return json({ error: accessError }, 403);
-  const body = await request.json();
-  const messageBody = parseBody(forumTextSchema, body.body);
   const settings = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = ?").bind(channel).first();
   if (settings?.suspended) return json({ error: settings.suspension_message || `#${channel} is temporarily suspended by administration.` }, 423);
+  const multipart = (request.headers.get("content-type") || "").includes("multipart/form-data");
+  const submitted = multipart ? await request.formData() : await request.json();
+  const rawBody = String(multipart ? submitted.get("body") || "" : submitted.body || "").trim();
+  const attachment = multipart ? submitted.get("attachment") : null;
+  const hasAttachment = Boolean(attachment?.name && attachment.size);
+  if (!rawBody && !hasAttachment) return json({ error: "Write a message or attach media." }, 400);
+  const messageBody = rawBody ? parseBody(forumTextSchema, rawBody) : "";
   if (containsLink(messageBody)) return json({ error: "Links are not allowed in forum channels." }, 400);
+  let messageType = "text";
+  let attachmentKey = null;
+  if (hasAttachment) {
+    if (attachment.type.startsWith("image/")) {
+      if (!settings?.images_enabled) return json({ error: "Pictures are disabled in this forum channel." }, 403);
+      const imageError = await validateImage(attachment, Number(settings.image_max_bytes || 10485760));
+      if (imageError) return json({ error: imageError }, 400);
+      messageType = "image";
+    } else if (attachment.type.startsWith("audio/") || ["webm", "m4a", "mp3", "ogg", "wav"].includes(attachment.name.split(".").pop()?.toLowerCase())) {
+      if (!settings?.audio_enabled) return json({ error: "Voice notes are disabled in this forum channel." }, 403);
+      const audioError = await validateAudio(attachment, Number(settings.audio_max_bytes || 26214400));
+      if (audioError) return json({ error: audioError }, 400);
+      messageType = "audio";
+    } else {
+      return json({ error: "Only pictures and voice notes can be attached." }, 400);
+    }
+    attachmentKey = await storeUpload(env, attachment, "forum-media");
+  }
   let parent = null;
-  if (body.parentMessageId) parent = await env.DB.prepare("SELECT id, user_id, channel FROM messages WHERE id = ? AND deleted_at IS NULL").bind(body.parentMessageId).first();
-  if (body.parentMessageId && (!parent || parent.channel !== channel)) return json({ error: "The reply target is not available." }, 400);
+  const parentMessageId = multipart ? submitted.get("parentMessageId") : submitted.parentMessageId;
+  if (parentMessageId) parent = await env.DB.prepare("SELECT id, user_id, channel FROM messages WHERE id = ? AND deleted_at IS NULL").bind(parentMessageId).first();
+  if (parentMessageId && (!parent || parent.channel !== channel)) {
+    if (attachmentKey && env.UPLOADS) await env.UPLOADS.delete(attachmentKey);
+    return json({ error: "The reply target is not available." }, 400);
+  }
   const messageId = id("msg");
-  await env.DB.prepare("INSERT INTO messages (id, channel, user_id, author, body, created_at, parent_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .bind(messageId, channel, session.id, session.name, messageBody, now(), parent?.id || null).run();
-  if (parent && parent.user_id !== session.id && parent.user_id !== "system") await notify(env, parent.user_id, "forum_reply", `${session.name} replied to you`, messageBody.slice(0, 180), `/forums?message=${encodeURIComponent(messageId)}`);
+  const author = session.role === "student" && session.forum_alias ? session.forum_alias : session.name;
+  const viewOnce = hasAttachment && String(multipart ? submitted.get("viewOnce") : submitted.viewOnce) === "true";
+  try {
+    await env.DB.prepare(`INSERT INTO messages (id, channel, user_id, author, body, created_at, parent_message_id, message_type, attachment_key, attachment_name, attachment_mime, attachment_size, view_once)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(messageId, channel, session.id, author, messageBody, now(), parent?.id || null, messageType, attachmentKey, hasAttachment ? attachment.name : null, hasAttachment ? attachment.type : null, hasAttachment ? attachment.size : null, viewOnce ? 1 : 0).run();
+  } catch (error) {
+    if (attachmentKey && env.UPLOADS) await env.UPLOADS.delete(attachmentKey);
+    throw error;
+  }
+  if (parent && parent.user_id !== session.id && parent.user_id !== "system") await notify(env, parent.user_id, "forum_reply", `${author} replied to you`, (messageBody || "Sent media").slice(0, 180), `/forums?message=${encodeURIComponent(messageId)}`);
   return listMessages(route, request, env);
+}
+
+function presentForumMessage(message, session) {
+  const own = message.user_id === session.id;
+  const admin = session.role === "admin";
+  const attached = Boolean(message.attachment_key);
+  const viewOnce = Boolean(message.view_once);
+  const viewed = Boolean(message.media_viewed_at);
+  return {
+    ...message,
+    real_author_name: admin ? message.real_author_name : undefined,
+    media_url: attached && (!viewOnce || own || admin) ? `/api/forums/messages/${encodeURIComponent(message.id)}/media` : null,
+    can_open_once: attached && viewOnce && !own && !admin && !viewed,
+    media_viewed: attached && viewOnce && !own && !admin && viewed,
+  };
+}
+
+async function updateForumProfile(request, env) {
+  const session = await requireSession(request, env);
+  if (session.role !== "student") return json({ error: "Forum usernames are available to student accounts." }, 403);
+  const body = await request.json();
+  const useAlias = Boolean(body.useAlias);
+  let alias = useAlias ? String(body.alias || "").trim().replace(/\s+/g, " ") : null;
+  if (useAlias && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{2,29}$/.test(alias)) return json({ error: "Use 3-30 letters, numbers, spaces, dots, dashes, or underscores." }, 400);
+  if (useAlias && /(?:^|\b)(?:admin|administrator|moderator|staff|official|hicm)(?:\b|$)/i.test(alias)) return json({ error: "Choose a username that cannot be mistaken for an official account." }, 400);
+  if (useAlias) {
+    const conflict = await env.DB.prepare("SELECT id FROM users WHERE id <> ? AND (forum_alias = ? COLLATE NOCASE OR name = ? COLLATE NOCASE) LIMIT 1").bind(session.id, alias, alias).first();
+    if (conflict) return json({ error: "That forum username is already in use." }, 409);
+  }
+  try {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE users SET forum_alias = ?, forum_alias_updated_at = ? WHERE id = ?").bind(alias, now(), session.id),
+      env.DB.prepare("UPDATE messages SET author = ? WHERE user_id = ?").bind(alias || session.name, session.id),
+    ]);
+  } catch (error) {
+    if (String(error.message).includes("UNIQUE")) return json({ error: "That forum username is already in use." }, 409);
+    throw error;
+  }
+  await audit(env, session.id, "forum.alias_updated", "user", session.id, { usingAlias: Boolean(alias) });
+  return getSessionResponse(request, env);
+}
+
+async function readForumMedia(route, request, env, consume = false) {
+  const session = await requireSession(request, env);
+  const messageId = route.split("/")[2];
+  const message = await env.DB.prepare("SELECT * FROM messages WHERE id = ? AND deleted_at IS NULL").bind(messageId).first();
+  if (!message?.attachment_key) return json({ error: "Forum media not found." }, 404);
+  const accessError = forumAccessError(session, message.channel);
+  if (accessError) return json({ error: accessError }, 403);
+  const viewOnce = Boolean(message.view_once);
+  const bypass = session.role === "admin" || message.user_id === session.id;
+  if (viewOnce && !bypass && !consume) return json({ error: "Open this view-once attachment from the forum message." }, 409);
+  if (viewOnce && !bypass) {
+    try {
+      await env.DB.prepare("INSERT INTO forum_media_views (message_id, user_id, viewed_at) VALUES (?, ?, ?)").bind(message.id, session.id, now()).run();
+    } catch (error) {
+      if (String(error.message).includes("UNIQUE")) return json({ error: "This view-once attachment has already been opened." }, 410);
+      throw error;
+    }
+  }
+  const object = await env.UPLOADS?.get(message.attachment_key);
+  if (!object) return json({ error: "Forum media not found." }, 404);
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  for (const [name, value] of Object.entries(securityHeaders())) headers.set(name, value);
+  headers.set("Cache-Control", "private, no-store, max-age=0");
+  headers.set("Content-Disposition", `inline; filename="${safeFilename(message.attachment_name || "forum-media")}"`);
+  headers.set("X-Content-Type-Options", "nosniff");
+  return new Response(object.body, { headers });
 }
 
 function forumAccessError(session, channel) {

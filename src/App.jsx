@@ -18,6 +18,7 @@ import LectureNotes from "./pages/LectureNotes";
 import StudentRegistration from "./pages/StudentRegistration";
 import DocumentRequests from "./pages/DocumentRequests";
 import VerifyThesis from "./pages/VerifyThesis";
+import InstallAppPrompt from "./components/InstallAppPrompt";
 
 export default function App() {
   const { offline, sessionExpired, dismissSessionExpired, setAuthOpen } = useApp();
@@ -47,6 +48,7 @@ export default function App() {
         </Routes>
       </main>
       <AuthModal />
+      <InstallAppPrompt />
       <Toast />
     </div>
   );

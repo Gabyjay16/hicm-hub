@@ -1,4 +1,5 @@
 import { processAnalysisJob } from "../functions/lib/analysis-job.js";
+import { cleanupExpiredLostItems } from "../functions/lib/lost-found-cleanup.js";
 
 export default {
   async queue(batch, env) {
@@ -12,5 +13,7 @@ export default {
       }
     }
   },
+  async scheduled(_controller, env, context) {
+    context.waitUntil(cleanupExpiredLostItems(env));
+  },
 };
-

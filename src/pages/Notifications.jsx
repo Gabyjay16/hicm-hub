@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { useApp } from "../context/AppContext";
-import { api, patchJson, postJson } from "../utils/api";
+import { patchJson, postJson } from "../utils/api";
 
 export default function Notifications() {
   const { session, requireAuth, refreshNotifications, setToast } = useApp();

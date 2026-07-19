@@ -3,6 +3,9 @@ main = "workers/analysis-worker.js"
 compatibility_date = "2026-07-13"
 compatibility_flags = ["nodejs_compat"]
 
+[triggers]
+crons = ["*/5 * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "hicm-hub-db"
@@ -17,4 +20,3 @@ queue = "hicm-analysis"
 max_batch_size = 4
 max_batch_timeout = 5
 max_retries = 3
-
