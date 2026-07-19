@@ -1,75 +1,61 @@
-import { Hash, Send } from "lucide-react";
-import { useEffect, useState } from "react";
-import PageHeader from "../components/PageHeader";
+import { MessageSquareText, Send } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../context/AppContext";
 import { api, postJson } from "../utils/api";
 
+const linkPattern = /(?:https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|org|net|edu|io|co|cm)\b|<a\s)/i;
+
 export default function Forums() {
-  const { channels, requireAuth, setToast, user } = useApp();
-  const [active, setActive] = useState("General");
+  const { requireAuth, setToast, user } = useApp();
   const [messages, setMessages] = useState([]);
   const [body, setBody] = useState("");
+  const [loading, setLoading] = useState(true);
+  const endRef = useRef(null);
 
-  async function load(channel = active) {
-    const data = await api(`/forums/${encodeURIComponent(channel)}/messages`);
-    setMessages(data.messages);
+  async function load() {
+    const data = await api("/forums/General/messages");
+    setMessages(data.messages || []);
+    setLoading(false);
   }
 
   useEffect(() => {
-    load(active).catch(() => {});
-  }, [active]);
+    load().catch(() => setLoading(false));
+    const timer = setInterval(() => load().catch(() => {}), 12000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages.length]);
 
   async function submit(event) {
     event.preventDefault();
     if (!requireAuth() || !body.trim()) return;
+    if (linkPattern.test(body)) { setToast("Links are not allowed in the General Forum."); return; }
     try {
-      const data = await postJson(`/forums/${encodeURIComponent(active)}/messages`, { body });
-      setMessages(data.messages);
+      const data = await postJson("/forums/General/messages", { body: body.trim() });
+      setMessages(data.messages || []);
       setBody("");
-    } catch (error) {
-      setToast(error.message);
-    }
+    } catch (error) { setToast(error.message); }
   }
 
   return (
-    <div className="page-shell">
-      <PageHeader eyebrow="Campus Life" title="Categorized Chat Forums" description="Modern channel-based discussion spaces for schoolwide and level-specific conversations." />
-
-      <div className="panel grid min-h-[620px] overflow-hidden lg:grid-cols-[280px_1fr]">
-        <aside className="border-b border-slate-200 bg-slate-50 p-4 lg:border-b-0 lg:border-r">
-          <p className="mb-3 text-xs font-black uppercase text-slate-500">Channels</p>
-          <div className="grid gap-2">
-            {(channels.length ? channels : ["General", "Level-200 (Year 1)", "Level-300 (Year 2)", "Level-400 (Year 3)"]).map((channel) => (
-              <button key={channel} onClick={() => setActive(channel)} className={`flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-bold ${active === channel ? "bg-teal-700 text-white" : "text-slate-700 hover:bg-white"}`}>
-                <Hash size={16} /> {channel}
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="flex min-h-[560px] flex-col">
-          <div className="border-b border-slate-200 p-4">
-            <h2 className="flex items-center gap-2 text-lg font-black"><Hash size={19} /> {active}</h2>
-          </div>
-          <div className="flex-1 space-y-4 overflow-y-auto bg-white p-5">
-            {messages.map((message) => {
-              const mine = message.author === user?.name;
-              return (
-                <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[78%] rounded-lg p-4 ${mine ? "bg-teal-700 text-white" : "bg-slate-100 text-slate-900"}`}>
-                    <p className="text-xs font-black opacity-75">{message.author}</p>
-                    <p className="mt-1 leading-6">{message.body}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <form onSubmit={submit} className="flex gap-2 border-t border-slate-200 p-4">
-            <input className="field" value={body} onChange={(event) => setBody(event.target.value)} placeholder={`Message #${active}`} />
-            <button className="btn-primary px-4"><Send size={18} /></button>
-          </form>
-        </section>
+    <main className="portal-canvas">
+      <div className="portal-frame flex min-h-[calc(100vh-132px)] max-w-4xl flex-col sm:min-h-[680px]">
+        <header className="flex items-center gap-4 border-b border-slate-200 px-5 py-4">
+          <span className="portal-icon-ring h-11 w-11"><MessageSquareText size={22} /></span>
+          <div><h1 className="text-lg font-extrabold text-navy">General Forum</h1><p className="text-xs text-slate-500">Campus-wide conversation</p></div>
+        </header>
+        <div className="flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-7" aria-live="polite">
+          {loading ? <p className="text-center text-sm text-slate-500">Loading conversation...</p> : messages.map((message) => {
+            const mine = message.author === user?.name;
+            return <article key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}><div className={`max-w-[86%] rounded-md px-4 py-3 sm:max-w-[72%] ${mine ? "bg-teal-700 text-white" : "bg-slate-100 text-navy"}`}><p className="text-xs font-bold opacity-70">{message.author}</p><p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{message.body}</p></div></article>;
+          })}
+          <div ref={endRef} />
+        </div>
+        <form onSubmit={submit} className="flex gap-2 border-t border-slate-200 bg-white p-4">
+          <label className="min-w-0 flex-1"><span className="sr-only">Message General Forum</span><input className="field py-3" value={body} maxLength={1000} onChange={(event) => setBody(event.target.value)} placeholder="Write a message" /></label>
+          <button className="btn-primary h-11 w-11 px-0" aria-label="Send message"><Send size={18} /></button>
+        </form>
       </div>
-    </div>
+    </main>
   );
 }
