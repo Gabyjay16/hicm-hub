@@ -3,8 +3,9 @@ import { expect, test } from "@playwright/test";
 const adminSession = { token: "test", viewRole: "staff", user: { id: "admin-1", role: "admin", name: "HICM Administrator", position: "Platform Administrator", phone: "000", forumAccess: true, moderationAccess: true } };
 
 test("administrator can inspect metrics and issue access codes", async ({ page }) => {
-  await page.route("**/api/session", async (route) => route.fulfill({ json: { session: adminSession, candidates: [], channels: ["General"] } }));
+  await page.route("**/api/session", async (route) => route.fulfill({ json: { session: adminSession, candidates: [], channels: ["General", "Marketing"] } }));
   await page.route("**/api/notifications", async (route) => route.fulfill({ json: { notifications: [], unread: 0 } }));
+  await page.route("**/api/document-requests", async (route) => route.fulfill({ json: { requests: [] } }));
   await page.route("**/api/admin/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === "POST" && path.endsWith("staff-codes")) return route.fulfill({ status: 201, json: { id: "code-1", code: "STF-ABCD-2345", expiresInHours: 24 } });
@@ -12,7 +13,8 @@ test("administrator can inspect metrics and issue access codes", async ({ page }
     if (path.endsWith("users")) return route.fulfill({ json: { users: [] } });
     if (path.endsWith("staff-codes")) return route.fulfill({ json: { codes: [] } });
     if (path.endsWith("forum/reports")) return route.fulfill({ json: { reports: [] } });
-    if (path.endsWith("forum/settings")) return route.fulfill({ json: { settings: { channel: "General", suspended: 0, images_enabled: 0, audio_enabled: 0 } } });
+    if (path.endsWith("forum/settings")) return route.fulfill({ json: { settings: [{ channel: "General", suspended: 0, images_enabled: 0, audio_enabled: 0 }] } });
+    if (path.endsWith("matricule-registry")) return route.fulfill({ json: { settings: { enforced: 0, total_records: 0 }, preview: [] } });
     if (path.endsWith("analysis")) return route.fulfill({ json: { jobs: [] } });
     return route.fulfill({ json: { logs: [] } });
   });
