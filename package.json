@@ -12,23 +12,33 @@
     "cf:db:migrate": "wrangler d1 migrations apply hicm-hub-db",
     "cf:r2:create": "wrangler r2 bucket create hicm-hub-uploads",
     "cf:analysis:deploy": "wrangler deploy --config wrangler.analysis.toml",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "test": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@hookform/resolvers": "^3.10.0",
     "fflate": "^0.8.2",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.2",
     "react-router-dom": "^6.28.0",
-    "unpdf": "^1.0.6"
+    "unpdf": "^1.0.6",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260719.1",
+    "@eslint/js": "^9.18.0",
     "@playwright/test": "^1.55.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
     "vite": "^6.0.3",
     "vitest": "^3.2.4",
     "wrangler": "^4.110.0"
