@@ -28,7 +28,7 @@ test("login is the default auth flow and registration is student-only", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Login" }).first().click();
   await expect(page.getByRole("heading", { name: "Login" })).toBeVisible();
-  await expect(page.getByLabel("Matricule / Staff Name")).toHaveAttribute("placeholder", "e.g. Uba23C001");
+  await expect(page.getByLabel("Matricule")).toHaveAttribute("placeholder", "e.g. Uba23C001");
   await expect(page.getByLabel("Password")).toBeVisible();
   await expect(page.getByLabel("Remember me on this device")).toBeVisible();
   await page.getByRole("link", { name: "Register" }).click();
@@ -40,7 +40,7 @@ test("login is the default auth flow and registration is student-only", async ({
 test("a valid hidden staff code entered at login opens dedicated registration", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Login" }).first().click();
-  await page.getByLabel("Matricule / Staff Name").fill("STF-ABCD-2345");
+  await page.getByLabel("Matricule").fill("STF-ABCD-2345");
   await page.getByLabel("Password").fill("TemporaryPass1");
   await page.getByRole("button", { name: "Login" }).last().click();
   await expect(page).toHaveURL("/staff-register?code=STF-ABCD-2345");
@@ -49,14 +49,35 @@ test("a valid hidden staff code entered at login opens dedicated registration", 
   await expect(page.getByLabel("Confirm Password")).toBeVisible();
 });
 
-test("students can choose a forum username and optionally mark media view once", async ({ page }) => {
+test("students can search chats, delete their messages, and optionally mark media view once", async ({ page }) => {
   const studentSession = { token: "test", viewRole: "student", user: { id: "student-1", role: "student", name: "Aisha Khan", matricule: "Uba23C001", department: "Marketing", forumAlias: null } };
+  const ownMessage = { id: "msg-1", channel: "General", user_id: "student-1", author: "Aisha Khan", body: "Budget meeting is at noon", message_type: "text", created_at: "2026-07-19T09:00:00.000Z" };
+  let messageDeleted = false;
   await page.route("**/api/session", async (route) => route.fulfill({ json: { session: studentSession, candidates: [], channels: ["General", "Marketing"] } }));
   await page.route("**/api/notifications", async (route) => route.fulfill({ json: { notifications: [], unread: 0 } }));
   await page.route("**/api/forums/profile", async (route) => route.fulfill({ json: { session: { ...studentSession, user: { ...studentSession.user, forumAlias: "LedgerLion" } }, candidates: [], channels: ["General", "Marketing"] } }));
-  await page.route("**/api/forums/**/messages", async (route) => route.fulfill({ json: { channel: "General", messages: [], settings: { links_enabled: 0, images_enabled: 1, audio_enabled: 1, suspended: 0 }, profile: { alias: "", usingAlias: false } } }));
+  await page.route("**/api/forums/messages/msg-1", async (route) => {
+    expect(route.request().method()).toBe("DELETE");
+    messageDeleted = true;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.route("**/api/forums/*/messages*", async (route) => {
+    const query = new URL(route.request().url()).searchParams.get("q")?.toLowerCase() || "";
+    const messages = !messageDeleted && (!query || ownMessage.body.toLowerCase().includes(query)) ? [ownMessage] : [];
+    return route.fulfill({ json: { channel: "General", messages, settings: { links_enabled: 0, images_enabled: 1, audio_enabled: 1, suspended: 0 }, profile: { alias: "", usingAlias: false } } });
+  });
 
   await page.goto("/forums");
+  await expect(page.getByLabel("Search messages")).toBeVisible();
+  await page.getByLabel("Search messages").fill("budget");
+  await expect(page.getByText("Budget meeting is at noon")).toBeVisible();
+  await page.getByLabel("Search messages").fill("library");
+  await expect(page.getByText("No messages match your search.")).toBeVisible();
+  await page.getByRole("button", { name: "Clear message search" }).click();
+  await expect(page.getByText("Budget meeting is at noon")).toBeVisible();
+  await page.getByRole("button", { name: "Delete message" }).click();
+  await expect(page.getByText("Budget meeting is at noon")).toHaveCount(0);
+
   await page.getByRole("button", { name: "Forum identity" }).click();
   await page.getByLabel("Use another username").check();
   await page.getByLabel("Forum username").fill("LedgerLion");

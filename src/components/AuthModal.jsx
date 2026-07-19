@@ -51,7 +51,7 @@ export default function AuthModal() {
         </div>
 
         <div className="grid gap-4 p-5">
-          <Field label="Matricule / Staff Name">
+          <Field label="Matricule">
             <input className="field" name="identifier" autoComplete="username" placeholder="e.g. Uba23C001" required />
           </Field>
           <Field label="Password">

@@ -150,6 +150,7 @@ export async function onRequest(context) {
     if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "GET") return await listMessages(route, request, env);
     if (route.startsWith("forums/") && route.endsWith("/messages") && request.method === "POST") return await createMessage(route, request, env);
     if (route === "forums/profile" && request.method === "PATCH") return await updateForumProfile(request, env);
+    if (/^forums\/messages\/[^/]+$/.test(route) && request.method === "DELETE") return await deleteForumMessage(route, request, env);
     if (/^forums\/messages\/[^/]+\/report$/.test(route) && request.method === "POST") return await reportMessage(route, request, env);
     if (/^forums\/messages\/[^/]+\/media$/.test(route) && request.method === "GET") return await readForumMedia(route, request, env);
     if (/^forums\/messages\/[^/]+\/media$/.test(route) && request.method === "POST") return await readForumMedia(route, request, env, true);
@@ -1467,12 +1468,26 @@ async function listMessages(route, request, env) {
   const session = await requireSession(request, env);
   const accessError = forumAccessError(session, channel);
   if (accessError) return json({ error: accessError }, 403);
-  const after = new URL(request.url).searchParams.get("after");
-  const rows = after
+  const url = new URL(request.url);
+  const after = url.searchParams.get("after");
+  const query = String(url.searchParams.get("q") || "").trim().slice(0, 80);
+  const searchPattern = `%${query}%`;
+  const rows = query
     ? await env.DB.prepare(`
         SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body,
           authors.name AS real_author_name, media_views.viewed_at AS media_viewed_at
-        FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id
+        FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id AND parent.deleted_at IS NULL
+        LEFT JOIN users authors ON authors.id = messages.user_id
+        LEFT JOIN forum_media_views media_views ON media_views.message_id = messages.id AND media_views.user_id = ?
+        WHERE messages.channel = ? AND messages.deleted_at IS NULL
+          AND (messages.body LIKE ? COLLATE NOCASE OR messages.author LIKE ? COLLATE NOCASE OR messages.message_type LIKE ? COLLATE NOCASE)
+        ORDER BY messages.created_at DESC LIMIT 100
+      `).bind(session.id, channel, searchPattern, searchPattern, searchPattern).all()
+    : after
+    ? await env.DB.prepare(`
+        SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body,
+          authors.name AS real_author_name, media_views.viewed_at AS media_viewed_at
+        FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id AND parent.deleted_at IS NULL
         LEFT JOIN users authors ON authors.id = messages.user_id
         LEFT JOIN forum_media_views media_views ON media_views.message_id = messages.id AND media_views.user_id = ?
         WHERE messages.channel = ? AND messages.created_at > ? AND messages.deleted_at IS NULL
@@ -1481,13 +1496,13 @@ async function listMessages(route, request, env) {
     : await env.DB.prepare(`
         SELECT messages.*, parent.author AS parent_author, parent.body AS parent_body,
           authors.name AS real_author_name, media_views.viewed_at AS media_viewed_at
-        FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id
+        FROM messages LEFT JOIN messages parent ON parent.id = messages.parent_message_id AND parent.deleted_at IS NULL
         LEFT JOIN users authors ON authors.id = messages.user_id
         LEFT JOIN forum_media_views media_views ON media_views.message_id = messages.id AND media_views.user_id = ?
         WHERE messages.channel = ? AND messages.deleted_at IS NULL
         ORDER BY messages.created_at DESC LIMIT 100
       `).bind(session.id, channel).all();
-  const source = after ? rows.results : rows.results.reverse();
+  const source = after && !query ? rows.results : rows.results.reverse();
   const messages = source.map((message) => presentForumMessage(message, session));
   const settings = await env.DB.prepare("SELECT * FROM forum_settings WHERE channel = ?").bind(channel).first();
   return json({
@@ -1552,6 +1567,20 @@ async function createMessage(route, request, env) {
   }
   if (parent && parent.user_id !== session.id && parent.user_id !== "system") await notify(env, parent.user_id, "forum_reply", `${author} replied to you`, (messageBody || "Sent media").slice(0, 180), `/forums?message=${encodeURIComponent(messageId)}`);
   return listMessages(route, request, env);
+}
+
+async function deleteForumMessage(route, request, env) {
+  const session = await requireSession(request, env);
+  const messageId = route.split("/")[2];
+  const message = await env.DB.prepare("SELECT id, channel, user_id, attachment_key FROM messages WHERE id = ? AND deleted_at IS NULL").bind(messageId).first();
+  if (!message) return json({ error: "Message not found." }, 404);
+  const accessError = forumAccessError(session, message.channel);
+  if (accessError) return json({ error: accessError }, 403);
+  if (session.role !== "admin" && message.user_id !== session.id) return json({ error: "You can only delete messages you sent." }, 403);
+  await env.DB.prepare("UPDATE messages SET deleted_at = ? WHERE id = ?").bind(now(), messageId).run();
+  if (message.attachment_key && env.UPLOADS) await env.UPLOADS.delete(message.attachment_key);
+  await audit(env, session.id, "forum.message_deleted", "forum_message", messageId, { channel: message.channel });
+  return json({ ok: true });
 }
 
 function presentForumMessage(message, session) {
