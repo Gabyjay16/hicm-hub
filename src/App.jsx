@@ -15,6 +15,9 @@ import Notifications from "./pages/Notifications";
 import { useApp } from "./context/AppContext";
 import StaffRegistration from "./pages/StaffRegistration";
 import LectureNotes from "./pages/LectureNotes";
+import StudentRegistration from "./pages/StudentRegistration";
+import DocumentRequests from "./pages/DocumentRequests";
+import VerifyThesis from "./pages/VerifyThesis";
 
 export default function App() {
   const { offline, sessionExpired, dismissSessionExpired, setAuthOpen } = useApp();
@@ -27,14 +30,17 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/staff-register" element={<StaffRegistration />} />
+          <Route path="/register" element={<StudentRegistration />} />
           <Route path="/announcements" element={<Protected><Announcements /></Protected>} />
           <Route path="/complaints" element={<Protected><Complaints /></Protected>} />
           <Route path="/quiz" element={<Protected><Quiz /></Protected>} />
           <Route path="/notes" element={<Protected><LectureNotes /></Protected>} />
           <Route path="/voting" element={<Protected><Voting /></Protected>} />
           <Route path="/lost-found" element={<Protected><LostFound /></Protected>} />
+          <Route path="/documents" element={<Protected><DocumentRequests /></Protected>} />
           <Route path="/forums" element={<Protected><Forums /></Protected>} />
           <Route path="/thesis" element={<Protected><Thesis /></Protected>} />
+          <Route path="/verify-thesis" element={<Protected><VerifyThesis /></Protected>} />
           <Route path="/admin" element={<Protected><Admin /></Protected>} />
           <Route path="/alerts" element={<Protected><Notifications /></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />
