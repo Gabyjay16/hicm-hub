@@ -5,7 +5,7 @@ import { useApp } from "../context/AppContext";
 export default function AuthModal() {
   const { authOpen, setAuthOpen, authenticate, setToast } = useApp();
   const [role, setRole] = useState("student");
-  const [form, setForm] = useState({ name: "", matricule: "", position: "", phone: "" });
+  const [form, setForm] = useState({ name: "", matricule: "", position: "", phone: "", password: "", accessCode: "" });
   const [busy, setBusy] = useState(false);
 
   if (!authOpen) return null;
@@ -54,14 +54,15 @@ export default function AuthModal() {
               <input className="field" value={form.matricule} onChange={(event) => setForm({ ...form, matricule: event.target.value.toUpperCase() })} placeholder="HICM2026..." required />
             </label>
           ) : (
-            <label className="grid gap-1">
-              <span className="label">Position</span>
-              <input className="field" value={form.position} onChange={(event) => setForm({ ...form, position: event.target.value })} placeholder="Registrar, Lecturer, Admin Officer..." required />
-            </label>
+            <>
+              <label className="grid gap-1"><span className="label">Password</span><input type="password" className="field" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Staff password" required /></label>
+              <label className="grid gap-1"><span className="label">Position <span className="font-normal text-slate-400">(new staff)</span></span><input className="field" value={form.position} onChange={(event) => setForm({ ...form, position: event.target.value })} placeholder="Lecturer, Registrar..." /></label>
+              <label className="grid gap-1"><span className="label">Staff Access Code <span className="font-normal text-slate-400">(new staff)</span></span><input className="field uppercase" value={form.accessCode} onChange={(event) => setForm({ ...form, accessCode: event.target.value.toUpperCase() })} placeholder="STF-XXXX-XXXX" /></label>
+            </>
           )}
           <label className="grid gap-1">
-            <span className="label">Phone Number</span>
-            <input className="field" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="681597837" required />
+            <span className="label">Phone Number {role === "staff" && <span className="font-normal text-slate-400">(new staff)</span>}</span>
+            <input className="field" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="681597837" required={role === "student"} />
           </label>
           <button disabled={busy} className="btn-primary w-full">{busy ? "Opening portal..." : "Continue"}</button>
         </div>
