@@ -814,6 +814,13 @@ async function createComplaint(request, env) {
   const semester = String(form.get("semester") || "").trim();
   const contactPhone = String(form.get("phone") || session.phone || "").trim();
   if (parsed.category === "Mark Complaint" && (!courseName || !courseCode || !academicYear || !semester || !contactPhone)) return json({ error: "Complete every mark complaint field." }, 400);
+  const customFields = await env.DB.prepare("SELECT * FROM complaint_form_fields WHERE active = 1 ORDER BY position, created_at").all();
+  const customAnswers = customFields.results.map((field) => ({
+    field,
+    answer: String(form.get(`custom_${field.id}`) || "").trim(),
+  }));
+  const missingField = customAnswers.find(({ field, answer }) => field.required && !answer);
+  if (missingField) return json({ error: `${missingField.field.label} is required.` }, 400);
   const proof = form.get("proof");
   if (proof?.name && proof.size > 10 * 1024 * 1024) return json({ error: "Evidence must be 10 MB or smaller." }, 400);
   const proofKey = proof && proof.name ? await storeUpload(env, proof, "complaint-evidence") : null;
@@ -822,10 +829,7 @@ async function createComplaint(request, env) {
   const statements = [env.DB.prepare(`INSERT INTO complaints (id, user_id, student_name, matricule, category, description, proof_key, status, created_at, course_name, course_code, academic_year, semester, contact_phone)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?, ?, ?)`)
     .bind(complaintId, session.id, session.name, session.matricule, parsed.category, parsed.description, proofKey, timestamp, courseName || null, courseCode || null, academicYear || null, semester || null, contactPhone || null)];
-  const customFields = await env.DB.prepare("SELECT * FROM complaint_form_fields WHERE active = 1 ORDER BY position, created_at").all();
-  for (const field of customFields.results) {
-    const answer = String(form.get(`custom_${field.id}`) || "").trim();
-    if (field.required && !answer) return json({ error: `${field.label} is required.` }, 400);
+  for (const { field, answer } of customAnswers) {
     statements.push(env.DB.prepare("INSERT INTO complaint_form_answers (complaint_id, field_id, field_label, answer) VALUES (?, ?, ?, ?)").bind(complaintId, field.id, field.label, answer || null));
   }
   if (proofKey) statements.push(env.DB.prepare("INSERT INTO complaint_attachments (id, complaint_id, owner_id, object_key, original_name, mime_type, file_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id("attachment"), complaintId, session.id, proofKey, proof.name, proof.type || "application/octet-stream", proof.size, timestamp));
