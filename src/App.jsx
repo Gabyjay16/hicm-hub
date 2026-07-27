@@ -26,11 +26,11 @@ export default function App() {
   const isForum = location.pathname === "/forums";
 
   return (
-    <div className={`min-h-screen ${isForum ? "pb-[72px] lg:pb-0 h-[100dvh] lg:h-auto overflow-hidden lg:overflow-visible" : "pb-20 lg:pb-0"}`}>
+    <div className={`min-h-screen flex flex-col ${isForum ? "pb-[72px] lg:pb-0 h-[100dvh] lg:h-auto overflow-hidden lg:overflow-visible" : "pb-20 lg:pb-0"}`}>
       {offline && <div role="status" className="bg-amber-100 px-4 py-2 text-center text-sm font-bold text-amber-950">You are offline. Saved server data will be available when the connection returns.</div>}
       {sessionExpired && <div role="alert" className="flex items-center justify-center gap-3 bg-rose-100 px-4 py-2 text-sm font-bold text-rose-950"><span>Your session expired.</span><button className="underline" onClick={() => { dismissSessionExpired(); setAuthOpen(true); }}>Sign in again</button></div>}
       <Navbar />
-      <main>
+      <main className={isForum ? "flex-1 min-h-0 flex flex-col" : "flex-1 flex flex-col"}>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/staff-register" element={<StaffRegistration />} />
