@@ -46,7 +46,7 @@
   }
 
   .portal-canvas-forum {
-    @apply h-[calc(100dvh-148px)] min-h-[calc(100dvh-148px)] bg-[#f7f8fa] p-0 overflow-hidden lg:h-auto lg:min-h-[calc(100vh-132px)] lg:px-5 lg:py-7 lg:overflow-visible;
+    @apply flex flex-col flex-1 bg-[#f7f8fa] p-0 overflow-hidden lg:min-h-[calc(100vh-132px)] lg:px-5 lg:py-7 lg:overflow-visible;
   }
 
   .portal-frame {
