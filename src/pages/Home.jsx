@@ -84,6 +84,12 @@ function StaffHome({ name }) {
         <PortalSection icon={FileSearch} title="Verify Thesis Results">
           <div className="px-4 pb-5 sm:px-6"><Link to="/verify-thesis" className="btn-secondary w-full"><FileSearch size={18} /> Open result verification</Link></div>
         </PortalSection>
+        <Link to="/forums" className="portal-standalone-row">
+          <span className="portal-icon-ring"><MessageSquareText size={24} /></span>
+          <span className="flex-1 text-lg font-extrabold text-navy sm:text-xl">Staff & Campus Forums</span>
+          <span className="portal-count">1</span>
+          <ChevronRight size={22} aria-hidden="true" />
+        </Link>
         <div className="border-t border-slate-200 px-5 py-4 text-sm text-slate-500">Signed in as {name}</div>
       </div>
     </main>
