@@ -56,9 +56,10 @@ export default function Navbar() {
         </div>
       </nav>
     </header>
-    {session && <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
+    {session && <nav className={`mobile-bottom-nav ${staff ? "grid-cols-5" : "grid-cols-4"}`} aria-label="Primary mobile navigation">
       <MobileLink to="/" label="Home" icon={Home} active={location.pathname === "/"} />
-      <MobileLink to={staff ? "/quiz" : "/forums"} label={staff ? "Academic Tools" : "Forum"} icon={staff ? BriefcaseBusiness : MessageSquare} active={location.pathname === (staff ? "/quiz" : "/forums")} />
+      <MobileLink to="/forums" label="Forum" icon={MessageSquare} active={location.pathname === "/forums"} />
+      {staff && <MobileLink to="/quiz" label="Tools" icon={BriefcaseBusiness} active={location.pathname === "/quiz"} />}
       <MobileLink to="/alerts" label="Alerts" icon={Bell} active={location.pathname === "/alerts"} />
       <button aria-label={session ? "Open profile menu" : "Login"} onClick={() => session ? setProfileOpen((open) => !open) : setAuthOpen(true)} className="mobile-nav-item"><UserRound size={23} /><span>Profile</span></button>
     </nav>}
