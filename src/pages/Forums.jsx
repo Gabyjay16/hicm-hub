@@ -25,6 +25,7 @@ export default function Forums() {
   const [openingMedia, setOpeningMedia] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [channelMenuOpen, setChannelMenuOpen] = useState(false);
   const endRef = useRef(null);
   const imageInputRef = useRef(null);
   const recorderRef = useRef(null);
@@ -198,23 +199,40 @@ export default function Forums() {
         <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
           <header className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-3 py-2.5 sm:gap-3 sm:px-5 sm:py-3.5 shrink-0 bg-white">
             <div className="min-w-0 flex-1 flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-500 shrink-0 sm:text-sm">Channel:</span>
-              {availableChannels.length > 0 ? (
-                <select
-                  value={channel}
-                  onChange={(event) => { setChannel(event.target.value); setSearch(""); }}
-                  className="field h-9 py-1 px-3 text-xs font-extrabold text-navy sm:text-sm bg-slate-50 border border-slate-300 rounded-md cursor-pointer focus:ring-2 focus:ring-teal-200 min-w-[140px] sm:min-w-[180px]"
-                  aria-label="Select forum channel dropdown"
+              <h2 className="hidden lg:block text-lg font-extrabold text-navy truncate">#{channel}</h2>
+              
+              <div className="relative lg:hidden">
+                <button
+                  onClick={() => setChannelMenuOpen(!channelMenuOpen)}
+                  className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-extrabold text-navy shadow-sm transition hover:bg-slate-100"
+                  aria-label="Select channel"
                 >
-                  {availableChannels.map((item) => (
-                    <option key={item} value={item}>
-                      #{item}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <h2 className="text-sm font-extrabold text-navy truncate">#{channel}</h2>
-              )}
+                  <Hash size={16} className="text-teal-700" />
+                  <span className="truncate">{channel}</span>
+                  <ChevronDown size={14} className="ml-1 text-slate-400" />
+                </button>
+                
+                {channelMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setChannelMenuOpen(false)}></div>
+                    <div className="absolute left-0 top-full z-50 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-lg ring-1 ring-black ring-opacity-5">
+                      <div className="px-2 py-1.5 text-xs font-bold uppercase tracking-wider text-slate-400">Channels</div>
+                      {availableChannels.map((item) => (
+                        <button
+                          key={item}
+                          onClick={() => { setChannel(item); setSearch(""); setChannelMenuOpen(false); }}
+                          className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition ${
+                            channel === item ? "bg-teal-50 font-extrabold text-teal-800" : "font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                          }`}
+                        >
+                          <Hash size={16} className={channel === item ? "text-teal-700" : "opacity-40"} />
+                          <span className="truncate">{item}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
             <div className="relative order-3 w-full sm:order-none sm:w-60 lg:w-68">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
