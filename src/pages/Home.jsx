@@ -28,7 +28,7 @@ function StudentHome({ name }) {
           <span className="font-bold text-teal-800">View all</span>
         </Link>
 
-        <PortalSection icon={GraduationCap} title="Academics" defaultOpen>
+        <PortalSection icon={GraduationCap} title="Academics">
           <PortalRow icon={ClipboardCheck} label="Evaluation" to="/quiz" />
           <PortalRow icon={BookOpen} label="Lecture Notes" to="/notes" />
           <PortalRow icon={FileSearch} label="Plagiarism Test" to="/thesis" />
@@ -61,7 +61,7 @@ function StaffHome({ name }) {
     <main className="portal-canvas">
       <div className="portal-frame">
         <div className="portal-page-title">Academic Tools</div>
-        <PortalSection icon={UploadCloud} title="Upload Lecture Notes" defaultOpen>
+        <PortalSection icon={UploadCloud} title="Upload Lecture Notes">
           <div className="px-4 pb-5 sm:px-6">
             <p className="mb-4 text-sm leading-6 text-slate-600">Publish a PDF or DOCX privately for the right department, level, and semester.</p>
             <Link to="/quiz?tab=notes" className="btn-primary w-full"><UploadCloud size={18} /> Open lecture note uploader</Link>

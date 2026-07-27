@@ -166,42 +166,57 @@ export default function Forums() {
   return (
     <main className="portal-canvas-forum">
       <div className="portal-frame-forum forum-layout min-h-0 lg:min-h-[680px]">
-        <aside className="shrink-0 border-b border-slate-200 bg-slate-50 lg:border-b-0 lg:border-r">
-          <div className="flex items-center gap-3 border-b border-slate-200 px-3 py-2.5 sm:px-5 sm:py-5">
-            <span className="portal-icon-ring h-8 w-8 sm:h-10 sm:w-10">
-              <UserRound size={18} />
+        <aside className="hidden shrink-0 border-r border-slate-200 bg-slate-50 lg:block">
+          <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-5">
+            <span className="portal-icon-ring h-10 w-10">
+              <UserRound size={20} />
             </span>
             <div>
-              <h1 className="text-xs font-extrabold text-navy sm:text-base">Forums</h1>
-              <p className="text-[10px] text-slate-500 sm:text-xs">HICM channels</p>
+              <h1 className="font-extrabold text-navy text-base">Forums</h1>
+              <p className="text-xs text-slate-500">HICM channels</p>
             </div>
           </div>
-          <nav className="flex gap-1.5 overflow-x-auto p-2 sm:p-3 lg:grid lg:gap-2" aria-label="Forum channels">
+          <nav className="grid gap-2 p-3" aria-label="Forum channels">
             {availableChannels.map((item) => (
               <button
                 key={item}
                 onClick={() => { setChannel(item); setSearch(""); }}
-                className={`flex min-w-fit items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left text-xs font-bold sm:px-3 sm:py-3 sm:text-sm ${
+                className={`flex items-center gap-2 rounded-md px-3 py-3 text-left text-sm font-bold transition ${
                   channel === item ? "bg-teal-700 text-white" : "text-slate-600 hover:bg-white"
                 }`}
               >
-                <Hash size={15} />
+                <Hash size={16} />
                 {item}
               </button>
             ))}
             {!availableChannels.length && (
-              <p className="p-3 text-xs text-slate-500 sm:text-sm">Forum access has not been enabled for this account.</p>
+              <p className="p-3 text-sm text-slate-500">Forum access has not been enabled for this account.</p>
             )}
           </nav>
         </aside>
 
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <header className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-3 py-2 sm:gap-3 sm:px-5 sm:py-4 shrink-0">
-            <div className="min-w-0 flex-1">
-              <h2 className="text-sm font-extrabold text-navy sm:text-base truncate">#{channel}</h2>
-              <p className="hidden text-xs text-slate-500 sm:block">Replies notify the original author</p>
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
+          <header className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-3 py-2.5 sm:gap-3 sm:px-5 sm:py-3.5 shrink-0 bg-white">
+            <div className="min-w-0 flex-1 flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-500 shrink-0 sm:text-sm">Channel:</span>
+              {availableChannels.length > 0 ? (
+                <select
+                  value={channel}
+                  onChange={(event) => { setChannel(event.target.value); setSearch(""); }}
+                  className="field h-9 py-1 px-3 text-xs font-extrabold text-navy sm:text-sm bg-slate-50 border border-slate-300 rounded-md cursor-pointer focus:ring-2 focus:ring-teal-200 min-w-[140px] sm:min-w-[180px]"
+                  aria-label="Select forum channel dropdown"
+                >
+                  {availableChannels.map((item) => (
+                    <option key={item} value={item}>
+                      #{item}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <h2 className="text-sm font-extrabold text-navy truncate">#{channel}</h2>
+              )}
             </div>
-            <div className="relative order-3 w-full sm:order-none sm:w-64 lg:w-72">
+            <div className="relative order-3 w-full sm:order-none sm:w-60 lg:w-68">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
               <input
                 className="field h-9 py-1.5 pl-9 pr-9 text-xs sm:h-10 sm:py-2 sm:pl-10 sm:pr-10 sm:text-sm"
@@ -246,7 +261,7 @@ export default function Forums() {
             </form>
           )}
 
-          <div className={`min-h-0 flex-1 overflow-y-auto px-3 sm:px-7 ${density === "compact" ? "space-y-2 py-2 sm:py-3" : "space-y-4 py-4 sm:space-y-5 sm:py-6"}`} aria-live="polite">
+          <div className={`min-h-0 flex-1 overflow-y-auto px-3 sm:px-6 ${density === "compact" ? "space-y-2 py-2 sm:py-3" : "space-y-4 py-4 sm:space-y-5 sm:py-6"}`} aria-live="polite">
             {loading && <p className="text-center text-sm text-slate-500">Loading conversation...</p>}
             {error && <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-950 sm:p-4 sm:text-sm">{error}</div>}
             {!loading && !error && messages.map((message) => (
@@ -291,25 +306,25 @@ export default function Forums() {
               {settings.suspension_message || `#${channel} is temporarily suspended by administration.`}
             </div>
           ) : availableChannels.length > 0 && (
-            <form onSubmit={submit} className="shrink-0 flex items-end gap-1.5 border-t border-slate-200 bg-white p-2 sm:gap-2 sm:p-3.5">
+            <form onSubmit={submit} className="shrink-0 flex items-center gap-1.5 border-t border-slate-200 bg-white p-2.5 sm:gap-2 sm:p-3.5 z-10">
               <input ref={imageInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={choosePicture} />
-              <button type="button" onClick={() => imageInputRef.current?.click()} disabled={!settings.images_enabled || recording} className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-slate-300 text-teal-800 disabled:text-slate-300 sm:h-10 sm:w-10" aria-label="Attach picture" title="Attach picture">
-                <ImagePlus size={18} />
+              <button type="button" onClick={() => imageInputRef.current?.click()} disabled={!settings.images_enabled || recording} className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-slate-300 text-teal-800 disabled:text-slate-300" aria-label="Attach picture" title="Attach picture">
+                <ImagePlus size={19} />
               </button>
               {recording ? (
-                <button type="button" onClick={stopRecording} className="grid h-9 min-w-9 shrink-0 place-items-center rounded-md bg-rose-700 px-2 text-white sm:h-10 sm:min-w-10" aria-label="Stop voice recording" title="Stop voice recording">
-                  <Square size={15} />
+                <button type="button" onClick={stopRecording} className="grid h-10 min-w-10 shrink-0 place-items-center rounded-md bg-rose-700 px-2 text-white" aria-label="Stop voice recording" title="Stop voice recording">
+                  <Square size={16} />
                   <span className="sr-only">{formatDuration(recordingSeconds)}</span>
                 </button>
               ) : (
-                <button type="button" onClick={startRecording} disabled={!settings.audio_enabled} className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-slate-300 text-teal-800 disabled:text-slate-300 sm:h-10 sm:w-10" aria-label="Record voice note" title="Record voice note">
-                  <Mic size={18} />
+                <button type="button" onClick={startRecording} disabled={!settings.audio_enabled} className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-slate-300 text-teal-800 disabled:text-slate-300" aria-label="Record voice note" title="Record voice note">
+                  <Mic size={19} />
                 </button>
               )}
               <label className="min-w-0 flex-1">
                 <span className="sr-only">Message {channel}</span>
                 <input
-                  className="field h-9 py-2 text-xs sm:h-10 sm:py-2.5 sm:text-sm"
+                  className="field h-10 py-2 text-xs sm:h-11 sm:py-2.5 sm:text-sm"
                   value={body}
                   maxLength={1000}
                   onChange={(event) => setBody(event.target.value)}
@@ -317,8 +332,8 @@ export default function Forums() {
                   disabled={recording}
                 />
               </label>
-              <button className="btn-primary h-9 w-9 shrink-0 px-0 sm:h-10 sm:w-10" aria-label="Send message" disabled={recording || (!body.trim() && !attachment)}>
-                <Send size={17} />
+              <button className="btn-primary grid h-10 w-10 shrink-0 place-items-center rounded-md bg-teal-700 text-white p-0" aria-label="Send message" disabled={recording || (!body.trim() && !attachment)}>
+                <Send size={18} />
               </button>
             </form>
           )}
