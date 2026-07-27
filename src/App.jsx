@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import Navbar from "./components/Navbar";
 import AuthModal from "./components/AuthModal";
 import Toast from "./components/Toast";
@@ -22,8 +22,11 @@ import InstallAppPrompt from "./components/InstallAppPrompt";
 
 export default function App() {
   const { offline, sessionExpired, dismissSessionExpired, setAuthOpen } = useApp();
+  const location = useLocation();
+  const isForum = location.pathname === "/forums";
+
   return (
-    <div className="min-h-screen pb-20 lg:pb-0">
+    <div className={`min-h-screen ${isForum ? "pb-[72px] lg:pb-0 h-[100dvh] lg:h-auto overflow-hidden lg:overflow-visible" : "pb-20 lg:pb-0"}`}>
       {offline && <div role="status" className="bg-amber-100 px-4 py-2 text-center text-sm font-bold text-amber-950">You are offline. Saved server data will be available when the connection returns.</div>}
       {sessionExpired && <div role="alert" className="flex items-center justify-center gap-3 bg-rose-100 px-4 py-2 text-sm font-bold text-rose-950"><span>Your session expired.</span><button className="underline" onClick={() => { dismissSessionExpired(); setAuthOpen(true); }}>Sign in again</button></div>}
       <Navbar />
